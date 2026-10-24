@@ -18,10 +18,11 @@ import threading
 import warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import numpy as np
 from ikpy.chain import Chain
+import serial
 from scipy.optimize import least_squares
 
 from calibrate import JOINTS, PROBE_ID, TICKS, Bus, delta
@@ -127,6 +128,7 @@ class Sim:
         self.phi_target = 0.0
         self.probe_idx = PROBE_START
         self.note = ""
+        self.retreating = False
         self.board_z = BOARD_Z
         self.calibrated = False
         self.msg = "ready" if pos_err < POS_TOL_MM and phi_err < PHI_TOL_DEG else (
@@ -162,6 +164,13 @@ class Sim:
             self.msg = f"blocked: jog larger than {MAX_JOG_MM:.0f} mm per command"
             return
         right, up, depth = self.camera_axes()
+        # The camera's "up" is perpendicular to the probe, so with the probe tilted it has a vertical
+        # part: a sideways correction would also raise or lower the tip. Keep sideways jogs level; only
+        # "in" (along the probe) changes the height.
+        up = np.array([up[0], up[1], 0.0])
+        up = up / np.linalg.norm(up) if np.linalg.norm(up) > 1e-6 else np.array([0.0, 1.0, 0.0])
+        right = np.array([right[0], right[1], 0.0])
+        right = right / np.linalg.norm(right) if np.linalg.norm(right) > 1e-6 else np.array([1.0, 0.0, 0.0])
         self.move((right * right_mm + up * up_mm + depth * in_mm) / 1000.0, height_mm)
 
     def _try(self, target, phi_target, label):
@@ -209,7 +218,9 @@ class Sim:
         d = np.array(d, dtype=float)
         self.note = ""
         h = self.height_mm(tip) if height_mm is None else float(height_mm)
-        cap = self.step_cap_mm(h)
+        # Moving straight away from the board can't hurt it, so retreating isn't slowed or shortened.
+        self.retreating = bool(d[2] > 0 and d[2] >= 0.9 * np.linalg.norm(d))
+        cap = CAP_FAR_MM if self.retreating else self.step_cap_mm(h)
         biggest = float(np.max(np.abs(d))) * 1000.0
         if biggest > cap:
             d *= cap / biggest
@@ -263,6 +274,7 @@ class Sim:
         }
 
 
+PRESENT_LOAD = 60   # STS/SMS register map; untested on the HX servos, so treat load as a hint only
 ACCELERATION = 41   # STS/SMS register map, same assumption as calibrate.py
 GOAL_POSITION = 42
 GOAL_SPEED = 46
@@ -277,6 +289,7 @@ class Hardware:
         self._speed_now = speed
         self.armed = False
         self.probes = sim.cal.get("probes", {}).get("positions", {})
+        self.port_name, self.baud = port, baud
         self.bus = Bus(port, baud)
         dead = [i for i in (*JOINTS, PROBE_ID) if not self.bus.ping(i)]
         if dead:
@@ -307,6 +320,47 @@ class Hardware:
             self.sim.probe_idx = near
             self.sim.q[TURRET_IDX] = math.radians(PROBE_ANGLES[near])
 
+    def reconnect(self):
+        """The USB adapter dropped (a servo tool wrote to the bus, the board was power-cycled, a cable
+        moved), which leaves our open serial handle dead. Reopen the port. We come back disarmed: the
+        servos may have reset, so torque and goals are unknown until you arm again."""
+        self.armed = False
+        try:
+            self.bus.close()
+        except Exception:
+            pass
+        try:
+            self.bus = Bus(self.port_name, self.baud)
+            return True
+        except SystemExit:
+            return False
+
+    def measure(self):
+        """Where the tip really is, from the joint encoders, without touching the commanded pose.
+
+        The commanded tip is what we asked for. If the probe is blocked (the board, or an
+        obstacle) the joints stop short of the command and the two drift apart: that gap, the
+        following error, is the contact signal. Returns the gap in mm (positive z = the real tip
+        is above where it was told to be) and the measured tip."""
+        q = self.sim.q.copy()
+        for sid in JOINTS:
+            q[CHAIN_INDEX[sid]] = self.raw_to_rad(sid, self.bus.read_pos(sid))
+        measured = self.sim.pose(q)[0]
+        commanded = self.sim.pose(self.sim.q)[0]
+        gap = (measured - commanded) * 1000.0
+        joints = []
+        for sid in JOINTS:
+            goal, r1, _ = self.bus.ph.read2ByteTxRx(self.bus.port, sid, GOAL_POSITION)
+            load, r2, _ = self.bus.ph.read2ByteTxRx(self.bus.port, sid, PRESENT_LOAD)
+            present = self.bus.read_pos(sid)
+            pid = [self.bus.ph.read1ByteTxRx(self.bus.port, sid, reg) for reg in (21, 22, 23)]  # P, D, I on STS-style servos
+            joints.append({"id": sid, "pid_regs_21_22_23": [v if r == 0 else None for v, r, _ in pid],
+                           "goal": goal % TICKS if r1 == 0 else None, "present": present,
+                           "err_ticks": delta(present, goal % TICKS) if r1 == 0 else None,
+                           "load_raw": load if r2 == 0 else None})
+        return {"measured_tip": [float(v) for v in measured], "joint_state": joints,
+                "follow_err_mm": float(np.linalg.norm(gap)), "follow_err_z_mm": float(gap[2])}
+
     def _goal(self, sid, raw):
         self.bus.ph.write2ByteTxRx(self.bus.port, sid, GOAL_POSITION, raw)
 
@@ -333,7 +387,8 @@ class Hardware:
 
     def push(self):
         # Slow the servos down near the board so one command can't move fast there.
-        speed = self.speed if self.sim.height_mm() >= FAR_MM else min(self.speed, self.near_speed)
+        far = self.sim.height_mm() >= FAR_MM or self.sim.retreating
+        speed = self.speed if far else min(self.speed, self.near_speed)
         if speed != self._speed_now:
             for sid in self._ids():
                 self.bus.ph.write2ByteTxRx(self.bus.port, sid, GOAL_SPEED, speed)
@@ -372,8 +427,32 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj):
         self._send(200, json.dumps(obj).encode(), "application/json")
 
+    def _recover(self):
+        """A serial error mid-request: reopen the port, say so, and answer with the current state."""
+        with LOCK:
+            back = HW.reconnect() if HW else False
+            SIM.msg = ("serial port dropped and reopened: press G to arm again" if back
+                       else f"serial port dropped and {HW.port_name if HW else 'it'} could not be reopened")
+            try:
+                self._json(snapshot())
+            except OSError:
+                pass
+
     def do_GET(self):
-        path = unquote(urlparse(self.path).path)
+        try:
+            self._get()
+        except serial.SerialException:
+            self._recover()
+
+    def do_POST(self):
+        try:
+            self._post()
+        except serial.SerialException:
+            self._recover()
+
+    def _get(self):
+        parsed = urlparse(self.path)
+        path = unquote(parsed.path)
         if path == "/api/state":
             with LOCK:
                 if HW and not HW.armed:  # read-only mirror: the viewer follows the real arm
@@ -381,7 +460,13 @@ class Handler(BaseHTTPRequestHandler):
                         HW.sync()
                     except ConnectionError as e:
                         SIM.msg = f"arm read failed: {e}"
-                return self._json(snapshot())
+                snap = snapshot()
+                if HW and "measure" in parse_qs(parsed.query):  # ?measure=1: add the encoders' view (read-only)
+                    try:
+                        snap.update(HW.measure())
+                    except ConnectionError as e:
+                        snap["measure_error"] = str(e)
+                return self._json(snap)
         if path == "/":
             path = "/viewer/index.html"
         target = (ROOT / path.lstrip("/")).resolve()
@@ -393,7 +478,7 @@ class Handler(BaseHTTPRequestHandler):
             ctype += "; charset=utf-8"
         self._send(200, target.read_bytes(), ctype)
 
-    def do_POST(self):
+    def _post(self):
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}")
         path = urlparse(self.path).path

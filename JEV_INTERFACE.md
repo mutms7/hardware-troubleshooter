@@ -16,6 +16,8 @@ When you finish drawing a box, the tool writes two files into `selection/`:
   "image": "selection.png",
   "frame": {"width": 640, "height": 480},
   "bbox": [170, 220, 60, 40],
+  "target_px": [200.0, 260.0],
+  "target_point": "middle of the bottom edge of the box",
   "bbox_format": "x, y, width, height in pixels, origin top-left",
   "probe_px": [300.0, 250.0]
 }
@@ -43,6 +45,7 @@ Write a small JSON file (any path; pass it as `--jev-file`):
 ```json
 {
   "tracking": true,
+  "fresh": true,
   "source": "jev",
   "probe_px": [300.0, 250.0],
   "target_bbox": [210.0, 130.0, 50.0, 40.0],
@@ -52,7 +55,11 @@ Write a small JSON file (any path; pass it as `--jev-file`):
 ```
 
 `error_px` = target centre - probe point. `error_px[0] > 0`: the target is right of the probe.
-`error_px[1] > 0`: the target is below it. It is `null` when nothing is tracked or the target is lost.
+`error_px[1] > 0`: the target is below it. It is `null` unless `fresh` is true, meaning this very frame
+produced the position. After a missed frame the box is held at its last good value for up to 8 frames
+(`tracking` stays true), but `fresh` is false and `error_px` is `null`, so a control loop never steers on
+stale data. Local modes (`--tracker homography|vit|csrt`) also add `tracker_score`: the number of matched
+features for homography, or the tracking score for vit.
 
 ## Run it
 
