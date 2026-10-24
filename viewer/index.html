@@ -25,6 +25,7 @@
   <h1 id="mode">Probe arm: simulation (no hardware)</h1>
   <div>tip (mm) <span id="tip">-</span></div>
   <div>mesh vs IK <span id="chk">-</span></div>
+  <div>height above board <span id="hgt">-</span> mm <span id="cal" style="color:#9aa1ad"></span></div>
   <div>probe tilt from vertical <span id="phi">-</span>&deg;</div>
   <div>probe slot <span id="probe">-</span></div>
   <div id="msg" class="ok">loading...</div>
@@ -115,8 +116,10 @@ function apply(s) {
   downLine.position.copy(tip);
   $('tip').textContent = s.tip.map(v => (v * 1000).toFixed(1)).join(', ');
   $('phi').textContent = s.phi.toFixed(1);
+  $('hgt').textContent = s.height_mm.toFixed(1);
+  $('cal').textContent = s.board_calibrated ? '(touched off)' : '(model estimate, -5 mm margin)';
   $('probe').textContent = s.probe + ' of ' + s.probe_count + ' (' + s.probe_deg.toFixed(0) + '°)';
-  const m = $('msg'); m.textContent = s.msg; m.className = s.msg === 'ok' || s.msg === 'ready' ? 'ok' : 'bad';
+  const m = $('msg'); m.textContent = s.msg + (s.note ? ' (' + s.note + ')' : ''); m.className = s.msg === 'ok' || s.msg === 'ready' ? 'ok' : 'bad';
 }
 async function pump() {
   if (busy) return;

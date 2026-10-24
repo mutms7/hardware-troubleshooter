@@ -39,12 +39,26 @@ LINK_ROLL = 11                              # wrist-roll link; its z axis is the
 LINK_TIP = 12
 LINK_PAN = 3
 
-# Placeholder keep-out plane (meters, URDF root frame). Nothing below this z is allowed.
-BOARD_Z = -0.10
+# Table = lowest point of the fixed base in the URDF root frame (meters), measured from the
+# base-mount mesh. The board's top surface is assumed BOARD_THICKNESS above it; calibrate later.
+TABLE_Z = -0.0554
+BOARD_THICKNESS = 0.005
+BOARD_Z = TABLE_Z + BOARD_THICKNESS
+FLOOR_MARGIN = 0.002       # the probe never goes lower than this above the board surface
+# The URDF's tip point is offset from the mount and isn't known to be mm-accurate, so until the
+# board height is touched off the model's height is reduced by this much (camera overrides it).
+TIP_UNCERTAINTY_MM = 5.0
+# Step governor: far from the board moves are big and fast, close to it they shrink.
+FAR_MM, NEAR_MM = 40.0, 10.0       # above FAR full steps, below NEAR the smallest steps
+CAP_FAR_MM, CAP_NEAR_MM = 10.0, 0.5
 POS_TOL_MM = 1.5           # reject an IK result that misses the target by more than this
 PHI_TOL_DEG = 1.5          # ...or that misses the requested tilt by more than this
 MAX_JOINT_STEP_DEG = 15.0  # reject a single move that swings any joint further than this
 TILT_STEP_DEG = 5.0
+MAX_JOG_MM = 10.0          # largest single jog command per axis; Jev loops for bigger moves
+# How the wrist camera is rolled about its optical axis. 0 = image-up points away from the base.
+# If a "right" jog moves the probe left in the image, try 180; if it moves up/down, try +/-90.
+CAMERA_ROLL_DEG = 0.0
 DOWN = np.array([0.0, 0.0, -1.0])
 
 # Home pose: probe straight down, picked so every joint keeps plenty of headroom for tilting.
@@ -112,11 +126,46 @@ class Sim:
         self.q = q
         self.phi_target = 0.0
         self.probe_idx = PROBE_START
+        self.note = ""
+        self.board_z = BOARD_Z
+        self.calibrated = False
         self.msg = "ready" if pos_err < POS_TOL_MM and phi_err < PHI_TOL_DEG else (
             f"reset pose is off by {pos_err:.1f} mm / {phi_err:.1f} deg")
 
+    def camera_axes(self):
+        """World-frame unit vectors (right, up, depth) of the wrist camera.
+
+        The camera looks along the probe shaft (depth, toward the board) and image-up points
+        away from the base axis. Assumes that mounting; fix it by rolling the camera or by
+        editing this method. Right-handed: right = depth x up.
+        """
+        _, shaft, _ = self.pose(self.q)
+        depth = shaft / np.linalg.norm(shaft)
+        tip, _, _ = self.pose(self.q)
+        pan = self.chain.forward_kinematics(self.q, full_kinematics=True)[LINK_PAN][:3, 3]
+        radial = tip - pan
+        radial[2] = 0.0
+        up = radial - (radial @ depth) * depth
+        if np.linalg.norm(up) < 1e-6:  # probe pointing along the radial direction
+            up = np.array([0.0, 0.0, 1.0]) - depth[2] * depth
+        up /= np.linalg.norm(up)
+        right = np.cross(depth, up)
+        c, s = math.cos(math.radians(CAMERA_ROLL_DEG)), math.sin(math.radians(CAMERA_ROLL_DEG))
+        return c * right - s * up, s * right + c * up, depth  # roll about the optical axis
+
+    def jog_camera(self, right_mm, up_mm, in_mm, height_mm=None):
+        """Move the probe tip in the camera frame. Positive = right / image-up / toward the board.
+
+        height_mm: optional height above the board as seen by the camera; trusted over the URDF.
+        """
+        if max(abs(right_mm), abs(up_mm), abs(in_mm)) > MAX_JOG_MM:
+            self.msg = f"blocked: jog larger than {MAX_JOG_MM:.0f} mm per command"
+            return
+        right, up, depth = self.camera_axes()
+        self.move((right * right_mm + up * up_mm + depth * in_mm) / 1000.0, height_mm)
+
     def _try(self, target, phi_target, label):
-        if target[2] < BOARD_Z:
+        if target[2] < self.board_z:
             self.msg = f"blocked: z {target[2]*1000:.0f} mm is below the board plane"
             return False
         q, pos_err, phi_err = self.solve(target, phi_target, self.q)
@@ -130,9 +179,54 @@ class Sim:
         self.q, self.phi_target, self.msg = q, phi_target, "ok"
         return True
 
-    def move(self, d):
+    @staticmethod
+    def step_cap_mm(height_mm):
+        if height_mm >= FAR_MM:
+            return CAP_FAR_MM
+        if height_mm <= NEAR_MM:
+            return CAP_NEAR_MM
+        return CAP_NEAR_MM + (height_mm - NEAR_MM) / (FAR_MM - NEAR_MM) * (CAP_FAR_MM - CAP_NEAR_MM)
+
+    def height_mm(self, tip=None):
+        """Model's height of the tip above the board surface, minus the tip uncertainty until
+        the board height has been touched off. Conservative on purpose."""
+        tip = self.pose(self.q)[0] if tip is None else tip
+        return (tip[2] - self.board_z) * 1000.0 - (0.0 if self.calibrated else TIP_UNCERTAINTY_MM)
+
+    def touch_off(self):
+        """Call when the probe tip is physically touching the board: ties the model to reality."""
+        self.board_z = float(self.pose(self.q)[0][2])
+        self.calibrated = True
+        self.msg = f"board height set from the tip: z = {self.board_z * 1000:.1f} mm"
+
+    def move(self, d, height_mm=None):
+        """Move the tip by d (meters), shortened by the step governor and stopped at the floor.
+
+        height_mm is the height above the board the camera sees. When given it overrides the
+        URDF-based estimate, because the camera is trusted over the model.
+        """
         tip, _, _ = self.pose(self.q)
-        self._try(tip + np.array(d, dtype=float), self.phi_target, "move")
+        d = np.array(d, dtype=float)
+        self.note = ""
+        h = self.height_mm(tip) if height_mm is None else float(height_mm)
+        cap = self.step_cap_mm(h)
+        biggest = float(np.max(np.abs(d))) * 1000.0
+        if biggest > cap:
+            d *= cap / biggest
+            self.note = f"shortened to {cap:.1f} mm ({h:.0f} mm above board)"
+        room = (h - FLOOR_MARGIN * 1000.0) / 1000.0                # how far down we may still go
+        room = min(room, tip[2] - (TABLE_Z + FLOOR_MARGIN))        # never below the table
+        if d[2] < 0 and -d[2] > room:
+            if room > 1e-4:
+                d *= room / -d[2]
+                self.note = "stopped at the floor"
+            else:
+                d[2] = 0.0
+                self.note = "at the floor: not going lower"
+                if not d.any():
+                    self.msg = "blocked: probe is at the floor"
+                    return
+        self._try(tip + d, self.phi_target, "move")
 
     def tilt(self, step):
         tip, _, _ = self.pose(self.q)
@@ -150,12 +244,18 @@ class Sim:
 
     def state(self):
         tip, shaft, phi = self.pose(self.q)
+        right, up, depth = self.camera_axes()
         return {
+            "camera_axes": {"right": right.tolist(), "up": up.tolist(), "depth": depth.tolist()},
             "joints": {self.chain.links[i].name: float(self.q[i]) for i in CHAIN_INDEX.values()},
             "tip": [float(v) for v in tip],
             "shaft": [float(v) for v in shaft],
             "phi": phi,
-            "board_z": BOARD_Z,
+            "board_z": self.board_z,
+            "board_calibrated": self.calibrated,
+            "height_mm": self.height_mm(tip),
+            "cap_mm": self.step_cap_mm(self.height_mm(tip)),
+            "note": self.note,
             "probe": self.probe_idx + 1,
             "probe_deg": PROBE_ANGLES[self.probe_idx],
             "probe_count": len(PROBE_ANGLES),
@@ -173,6 +273,8 @@ class Hardware:
 
     def __init__(self, sim, port, baud, speed, accel):
         self.sim, self.speed, self.accel = sim, speed, accel
+        self.near_speed = 100       # steps/s within FAR_MM of the board
+        self._speed_now = speed
         self.armed = False
         self.probes = sim.cal.get("probes", {}).get("positions", {})
         self.bus = Bus(port, baud)
@@ -221,6 +323,7 @@ class Hardware:
             self.bus.ph.write2ByteTxRx(self.bus.port, sid, GOAL_SPEED, self.speed)
             self._goal(sid, self.bus.read_pos(sid))  # hold where it is before torque comes on
             self.bus.torque(sid, True)
+        self._speed_now = self.speed
         self.armed = True
 
     def stop(self):
@@ -229,6 +332,12 @@ class Hardware:
         self.sim.msg = "stopped: holding current position"
 
     def push(self):
+        # Slow the servos down near the board so one command can't move fast there.
+        speed = self.speed if self.sim.height_mm() >= FAR_MM else min(self.speed, self.near_speed)
+        if speed != self._speed_now:
+            for sid in self._ids():
+                self.bus.ph.write2ByteTxRx(self.bus.port, sid, GOAL_SPEED, speed)
+            self._speed_now = speed
         for sid in JOINTS:
             self._goal(sid, self.rad_to_raw(sid, self.sim.q[CHAIN_INDEX[sid]]))
         if self.probes:
@@ -239,7 +348,7 @@ SIM = Sim()
 HW = None
 LOCK = threading.Lock()
 ALLOWED_DIRS = ("viewer", "urdf")
-MOTION = ("/api/move", "/api/tilt", "/api/probe", "/api/reset")
+MOTION = ("/api/move", "/api/tilt", "/api/probe", "/api/reset", "/api/cmd")
 
 
 def snapshot():
@@ -301,6 +410,21 @@ class Handler(BaseHTTPRequestHandler):
                     SIM.msg = "no probe positions taught: ID 5 not moved (calibrate.py --probes-only 3)"
             elif path == "/api/reset":
                 SIM.reset()
+            elif path == "/api/cmd":
+                cmd = body.get("cmd")
+                if cmd == "jog":
+                    hint = body.get("height_mm")
+                    SIM.jog_camera(float(body.get("right_mm", 0)), float(body.get("up_mm", 0)),
+                                   float(body.get("in_mm", 0)),
+                                   None if hint is None else float(hint))
+                elif cmd == "touch_off":
+                    SIM.touch_off()
+                elif cmd == "tilt":
+                    SIM.tilt(float(body.get("deg", 0)) / TILT_STEP_DEG)
+                elif cmd == "stop" and HW:
+                    HW.stop()
+                elif cmd != "state":
+                    SIM.msg = f"unknown command: {cmd!r} (jog, tilt, stop, state)"
             elif path == "/api/arm" and HW:
                 try:
                     HW.arm(bool(body.get("on")))
