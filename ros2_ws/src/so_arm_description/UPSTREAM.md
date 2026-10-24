@@ -1,7 +1,8 @@
 # Vendored SO-ARM101 description
 
 Copied unchanged from https://github.com/MuammerBay/SO-ARM_ROS2_URDF at commit
-`8a68d6e1106cbc570664a29f6d65af665cd30e72` (2025-05-27). Only `.git` was left out.
+`8a68d6e1106cbc570664a29f6d65af665cd30e72` (2025-05-27). Only `.git` was left out. The
+repo's `.gitattributes` normalized line endings in the text files from CRLF to LF.
 That repository declares a BSD license in `package.xml` and ships no separate LICENSE
 file. It is derived from TheRobotStudio's SO-ARM100 project
 (https://github.com/TheRobotStudio/SO-ARM100, Simulation/SO101), which is Apache-2.0.
