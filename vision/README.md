@@ -1,7 +1,9 @@
 # Vision stack
 
 The CV around the measurement orchestrator. There are three cameras: the fixed camera
-over the bench and one wrist camera on each Maker Arm's `link_007`. The AMG8833 thermal
+beside the bench, looking down at roughly 45 degrees, and one wrist camera on each
+Maker Arm's `link_007`. Calibration measures the actual fixed camera pose; the
+mounting angle isn't assumed by registration. The AMG8833 thermal
 sensor adds hints on top. It's a plain Python library (numpy, OpenCV, PyYAML) that
 uses [registration/](../registration/README.md) and [arm/](../arm/README.md). It never
 moves an arm, and nothing it reports is evidence of electrical contact.
@@ -114,8 +116,9 @@ centimetres wide, so this is a hint, not a measurement.
 
 `calibration.py` holds the offline steps, in this order on a new rig:
 
-1. **Intrinsics:** run `calibrate_intrinsics` per camera on ChArUco views
-   (`detect_charuco`). It writes camera_calibration YAML. k3 is held at zero unless the
+1. **Intrinsics:** run `calibrate_intrinsics` per camera on plain checkerboard views
+   (`CheckerboardTarget`, `detect_checkerboard`). It writes camera_calibration YAML.
+   k3 is held at zero unless the
    views reach the image corners.
 2. **Bench plane:** run `bench_plane` from `target_pose` of a target lying flat on the
    bench, seen by the fixed camera. The result goes in the registration rig YAML.
@@ -134,9 +137,55 @@ function reports a residual, but none decides whether it's acceptable. Record th
 residuals and set limits from the real rig. Re-zeroing a motor (`maker-arm zero`)
 invalidates step 3 onward.
 
-OpenCV's `CharucoDetector` reports corners 0.5 px down and right of where its own
+### Plain checkerboard capture
+
+Use a flat, rigid pattern with measured square spacing. Configure **inner corners**,
+not squares: a print with 7 by 5 squares has 6 by 4 inner corners. The physical board's
+outer corners may be rounded; the printed grid needs straight square edges and clear
+intersections. Supply your own measured counts and spacing; no physical dimensions
+are assumed here.
+
+A thin black border outside the grid followed by a white band is supported. Keep
+the surrounding white band visible and exclude both borders from the corner counts.
+
+Capture varied positions, tilts and distances with the complete pattern visible,
+including views near the image edges. Keep resolution and focus settings consistent
+with use. Calibrate each of the three cameras separately. The five-view minimum in
+code is an input check, not evidence of sufficient coverage or accuracy.
+
+```python
+from hardware_troubleshooter_vision.calibration import (
+    CheckerboardTarget, detect_checkerboard, calibrate_intrinsics,
+)
+
+target = CheckerboardTarget(corners_x, corners_y, measured_square_m)
+detections = [detect_checkerboard(gray, target) for gray in grayscale_images]
+info, rms_px = calibrate_intrinsics([d for d in detections if d is not None])
+# Save info as camera_calibration YAML; inspect residuals and independent views.
+```
+
+For intrinsics, the detector's ordering is sufficient. For bench, joint-offset and
+hand-eye **poses**, the target must use the same physical origin and axes in every
+image. A plain checkerboard has no corner IDs. Inspect the detected point order with
+`cv2.drawChessboardCorners`; use an external origin/axis mark outside the grid to
+check it. Call `detect_checkerboard(..., reverse_order=False)` to confirm the detected
+order or `reverse_order=True` to reverse it. This is per image, not a global setting.
+If neither matches the chosen origin and axes, reject the view (square grids can have
+additional orientation ambiguity). The mark isn't automatically detected. An omitted
+`reverse_order` is allowed for intrinsics but `target_pose` refuses that detection.
+The origin is the first inner corner, +x along a row and +y along a column.
+
+Use `target_pose` with these verified detections for calibration steps 2 through 4.
+For the bench plane, include the calibration target's thickness. For PCB registration,
+the configured bench plane plus PCB thickness must describe its actual top surface;
+include fixture elevation if it sits above the bench. At the oblique camera angle,
+an incorrect height also shifts the inferred horizontal position.
+
+ChArUco remains optional through `CharucoTarget` and `detect_charuco`; its marker IDs
+provide corner identities. OpenCV's `CharucoDetector` reports corners 0.5 px down and right of where its own
 `projectPoints` puts them (measured +0.49 px, scatter 0.04 px). `detect_charuco` shifts
-them back so every pixel here uses one convention.
+them back so every pixel here uses one convention. This correction is specific to
+that detector and is not applied to checkerboard detections.
 
 ## Configuration
 
@@ -166,7 +215,8 @@ python -m pytest -q vision/test
 
 Run each folder's suite on its own. The registration, arm and vision suites each
 have a `conftest`, and one pytest run over all three mixes them up. The tests render
-synthetic views: ChArUco targets, wrist copper and the registration board. They check
+synthetic views: plain checkerboards, optional ChArUco targets, wrist copper and the
+registration board. They check
 the camera intrinsics, hand-eye mounts and joint offsets recovered against ground
 truth. They check alignment accuracy and convergence, ambiguity and refusals, and arm
 masks against projected mesh vertices. They also run registration end to end through
