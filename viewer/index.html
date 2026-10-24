@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Probe arm sim</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #14161a; color: #d7dae0; font: 13px/1.5 ui-monospace, Consolas, monospace; }
+  #hud { position: fixed; top: 12px; left: 12px; padding: 10px 12px; background: rgba(20,22,26,.85); border: 1px solid #2c3038; border-radius: 6px; min-width: 300px; }
+  #hud h1 { margin: 0 0 6px; font-size: 13px; color: #8fb4ff; }
+  #msg.ok { color: #7fd48a; } #msg.bad { color: #ff8a80; }
+  kbd { background: #2a2e36; border-radius: 3px; padding: 0 4px; }
+  #keys { margin-top: 8px; color: #9aa1ad; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/examples/jsm/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+  "urdf-loader": "https://cdn.jsdelivr.net/npm/urdf-loader@0.12.4/src/URDFLoader.js"
+} }
+</script>
+</head>
+<body>
+<div id="hud">
+  <h1 id="mode">Probe arm: simulation (no hardware)</h1>
+  <div>tip (mm) <span id="tip">-</span></div>
+  <div>mesh vs IK <span id="chk">-</span></div>
+  <div>probe tilt from vertical <span id="phi">-</span>&deg;</div>
+  <div>probe slot <span id="probe">-</span></div>
+  <div id="msg" class="ok">loading...</div>
+  <div id="keys">
+    <kbd>A</kbd><kbd>D</kbd> x &nbsp; <kbd>W</kbd><kbd>S</kbd> y &nbsp; <kbd>R</kbd><kbd>F</kbd> z<br>
+    <kbd>Q</kbd><kbd>E</kbd> wrist tilt (tip stays put)<br>
+    <kbd>Z</kbd><kbd>C</kbd> turn probe turret (ID 5 only) &nbsp; <kbd>Shift</kbd> coarse &nbsp; <kbd>0</kbd> reset<br>
+    <span id="hwkeys" style="display:none"><kbd>G</kbd> arm / disarm real arm &nbsp; <kbd>Space</kbd> stop (hold position)<br></span>
+    drag to orbit, scroll to zoom
+  </div>
+</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import URDFLoader from 'urdf-loader';
+
+// Edit these to remap keys to URDF-frame axes (meters per tick).
+const FINE = 0.002, COARSE = 0.010;
+const KEYMAP = {
+  w: [ 0,-1, 0], s: [ 0, 1, 0],
+  d: [-1, 0, 0], a: [ 1, 0, 0],
+  r: [ 0, 0, 1], f: [ 0, 0,-1],
+};
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14161a);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 10);
+camera.position.set(0.5, 0.4, 0.6);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 0.1, 0);
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(1, 2, 1.5); scene.add(sun);
+scene.add(new THREE.GridHelper(1, 20, 0x3a3f4a, 0x262a31));
+
+// URDF is Z-up, three.js is Y-up: everything robot-frame lives in this group.
+const world = new THREE.Group();
+world.rotation.x = -Math.PI / 2;
+scene.add(world);
+world.add(new THREE.AxesHelper(0.15)); // red X, green Y, blue Z in URDF frame
+
+const board = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.4, 0.4),
+  new THREE.MeshBasicMaterial({ color: 0x2f9e5f, transparent: true, opacity: 0.25, side: THREE.DoubleSide }));
+world.add(board);
+
+const ikMarker = new THREE.Mesh(new THREE.SphereGeometry(0.006), new THREE.MeshBasicMaterial({ color: 0xffd23f }));
+world.add(ikMarker);
+
+const shaftGeom = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, 1)]);
+const shaftLine = new THREE.Line(shaftGeom, new THREE.LineBasicMaterial({ color: 0xff5a5a }));
+world.add(shaftLine);
+const downLine = new THREE.Line(
+  new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -0.06)]),
+  new THREE.LineDashedMaterial({ color: 0x6aa5ff, dashSize: 0.006, gapSize: 0.004 }));
+downLine.computeLineDistances();
+world.add(downLine);
+
+let robot = null, tipLink = null, turretDeg = 0, hw = { mode: 'sim', armed: false };
+const loader = new URDFLoader();
+loader.packages = { debugger_arm: '/urdf' };
+loader.load('/urdf/debugger_arm.urdf', r => { robot = r; tipLink = r.links['probe_tip']; world.add(r); });
+
+const $ = id => document.getElementById(id);
+let pending = [0, 0, 0], probeStep = 0, tiltStep = 0, reset = false, busy = false;
+
+async function post(path, body) {
+  const res = await fetch(path, { method: 'POST', body: JSON.stringify(body) });
+  return res.json();
+}
+function apply(s) {
+  if (robot) for (const [name, v] of Object.entries(s.joints)) robot.joints[name]?.setJointValue(v);
+  turretDeg = s.probe_deg;
+  hw = s.hw;
+  const mode = $('mode');
+  if (hw.mode === 'hardware') {
+    mode.textContent = hw.armed ? 'REAL ARM: ARMED (keys move the arm)' : 'REAL ARM: disarmed (viewer mirrors the arm)';
+    mode.style.color = hw.armed ? '#ff6b6b' : '#ffd23f';
+    $('hwkeys').style.display = 'inline';
+  }
+  ikMarker.position.set(...s.tip);
+  board.position.set(0, 0, s.board_z);
+  const tip = new THREE.Vector3(...s.tip), shaft = new THREE.Vector3(...s.shaft);
+  shaftLine.geometry.setFromPoints([tip.clone().addScaledVector(shaft, -0.07), tip]);
+  downLine.position.copy(tip);
+  $('tip').textContent = s.tip.map(v => (v * 1000).toFixed(1)).join(', ');
+  $('phi').textContent = s.phi.toFixed(1);
+  $('probe').textContent = s.probe + ' of ' + s.probe_count + ' (' + s.probe_deg.toFixed(0) + '°)';
+  const m = $('msg'); m.textContent = s.msg; m.className = s.msg === 'ok' || s.msg === 'ready' ? 'ok' : 'bad';
+}
+async function pump() {
+  if (busy) return;
+  busy = true;
+  try {
+    if (reset) { reset = false; apply(await post('/api/reset', {})); }
+    if (probeStep) { const st = probeStep; probeStep = 0; apply(await post('/api/probe', { step: st })); }
+    if (tiltStep) { const st = tiltStep; tiltStep = 0; apply(await post('/api/tilt', { step: st })); }
+    if (pending.some(v => v)) { const d = pending; pending = [0, 0, 0]; apply(await post('/api/move', { d })); }
+  } finally { busy = false; }
+}
+addEventListener('keydown', e => {
+  const k = e.key.toLowerCase();
+  if (KEYMAP[k]) { const s = e.shiftKey ? COARSE : FINE; KEYMAP[k].forEach((v, i) => pending[i] += v * s); e.preventDefault(); }
+  else if (k === 'q') { tiltStep -= 1; e.preventDefault(); }
+  else if (k === 'e') { tiltStep += 1; e.preventDefault(); }
+  else if (k === 'z') probeStep -= e.repeat ? 0 : 1;
+  else if (k === 'c') probeStep += e.repeat ? 0 : 1;
+  else if (k === '0') reset = true;
+  else if (k === 'g' && hw.mode === 'hardware' && !e.repeat) post('/api/arm', { on: !hw.armed }).then(apply);
+  else if (k === ' ' && hw.mode === 'hardware') { post('/api/stop', {}).then(apply); e.preventDefault(); }
+  pump();
+});
+setInterval(pump, 40);
+setInterval(() => { if (hw.mode === 'hardware' && !hw.armed && !busy) fetch('/api/state').then(r => r.json()).then(apply); }, 250);
+
+fetch('/api/state').then(r => r.json()).then(apply);
+
+const tmp = new THREE.Vector3();
+function frame() {
+  requestAnimationFrame(frame);
+  controls.update();
+  if (tipLink && turretDeg !== 0) {
+    $('chk').textContent = 'n/a (turret turned; modeled tip is the middle probe)';
+  } else if (tipLink) {
+    // Compare the loaded mesh tree's tip against the IK/FK tip; they should coincide.
+    tipLink.getWorldPosition(tmp);
+    world.worldToLocal(tmp);
+    const dmm = tmp.distanceTo(ikMarker.position) * 1000;
+    $('chk').textContent = dmm.toFixed(2) + ' mm' + (dmm < 1 ? ' (match)' : ' (MISMATCH)');
+  }
+  renderer.render(scene, camera);
+}
+frame();
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+</script>
+</body>
+</html>
