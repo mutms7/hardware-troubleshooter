@@ -1,4 +1,4 @@
-param([ValidateSet('ros', 'stub')][string]$Backend = 'stub')
+param([ValidateSet('none', 'stub')][string]$Backend = 'stub')
 $ErrorActionPreference = 'Stop'
 Push-Location -LiteralPath $PSScriptRoot
 try {

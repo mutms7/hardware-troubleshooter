@@ -1,4 +1,4 @@
-"""One-shot, software-only MCP client. Never connects to ROS or hardware."""
+"""One-shot, software-only MCP client. Never connects to hardware."""
 
 import json
 import os

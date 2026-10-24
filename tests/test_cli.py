@@ -14,8 +14,8 @@ import pytest
     ],
 )
 def test_smoke_command_runs_actual_mcp(scenario, status, reading):
-    # Host ROS settings can't turn the smoke command into a hardware operation.
-    env = dict(os.environ, TH_BACKEND="ros", TH_STUB_SCENARIO="unavailable")
+    # Host backend settings can't turn the smoke command into a hardware operation.
+    env = dict(os.environ, TH_BACKEND="none", TH_STUB_SCENARIO="unavailable")
     process = subprocess.run(
         [sys.executable, "-m", "troubleshooter.cli", "smoke", "--scenario", scenario],
         capture_output=True,

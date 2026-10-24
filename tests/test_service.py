@@ -8,12 +8,12 @@ async def no_progress(stage, attempt):
     pass
 
 
-async def test_ros_timeouts_unset_prevent_goal_dispatch(tmp_path):
-    settings = Settings(backend="ros", journal=str(tmp_path / "operations.sqlite3"))
+async def test_unset_timeouts_prevent_goal_dispatch(tmp_path):
+    settings = Settings(backend="none", journal=str(tmp_path / "operations.sqlite3"))
     backend = StubBackend(settings)
 
     def must_not_dispatch(*args):
-        raise AssertionError("Unset ROS limits must prevent dispatch")
+        raise AssertionError("Unset limits must prevent dispatch")
 
     backend.start = must_not_dispatch
     service = MeasurementService(settings, backend)

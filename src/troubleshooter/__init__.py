@@ -1,1 +1,1 @@
-"""MCP translates electrical tasks to ROS goals and validates measurement evidence."""
+"""MCP translates electrical tasks to orchestrator goals and validates measurement evidence."""

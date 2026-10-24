@@ -8,6 +8,6 @@ tool_timeout_sec = 10
 TH_BACKEND = "stub"
 TH_JOURNAL = "C:/absolute/path/hardware-troubleshooter/data/mcp_operations.sqlite3"
 
-# For ROS, launch in the sourced ROS environment with a compatible Python.
-# Set TH_OUTER_TIMEOUT_S and TH_CANCEL_GRACE_S to agreed values.
+# For a future hardware backend, set TH_OUTER_TIMEOUT_S and TH_CANCEL_GRACE_S
+# to agreed values.
 # Host tool_timeout_sec must exceed their combined window plus transport overhead.

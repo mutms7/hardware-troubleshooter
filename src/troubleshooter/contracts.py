@@ -39,7 +39,7 @@ class Measurement(BaseModel):
     attempts: int = 0
     recovery_log: list[Any] = Field(default_factory=list)
     failure_reason: str | None = None
-    # No result from ROS means mode is unknown. Never infer it from MCP configuration.
+    # No orchestrator result means mode is unknown. Never infer it from MCP configuration.
     mode: Mode | None = None
     registration_id: str | None = None
     duration_ms: int = 0
@@ -82,7 +82,7 @@ def failure(request_id: str, target: str, reason: str, *, uncertain=False) -> Me
 
 
 def normalize_result(raw: dict, request_id: str, target: str) -> Measurement:
-    """ROS NaN is never emitted as JSON; inconsistent evidence is never usable."""
+    """Orchestrator NaN is never emitted as JSON; inconsistent evidence is never usable."""
     try:
         wire = WireResult.model_validate(raw)
     except (ValidationError, TypeError):

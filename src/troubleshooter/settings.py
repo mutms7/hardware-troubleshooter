@@ -7,12 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     # Ignore the old .env by design. No model-provider credentials are needed.
     model_config = SettingsConfigDict(env_prefix="TH_", extra="ignore")
-    backend: Literal["ros", "stub"] = "ros"
-    action_name: str = "/measure"
-    registry_service: str = "/registry/list"
-    status_service: str = "/rig/status"
+    # No hardware backend exists yet; "none" fails closed instead of simulating.
+    backend: Literal["none", "stub"] = "none"
     availability_timeout_s: float = Field(default=1.0, gt=0, le=30)
-    service_timeout_s: float = Field(default=2.0, gt=0, le=30)
     outer_timeout_s: float | None = Field(default=None, gt=0, le=600)
     cancel_grace_s: float | None = Field(default=None, gt=0, le=30)
     journal: str = "data/mcp_operations.sqlite3"

@@ -5,10 +5,10 @@ from .settings import Settings
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Hardware measurement MCP to ROS boundary")
+    parser = argparse.ArgumentParser(description="Hardware measurement MCP boundary")
     sub = parser.add_subparsers(dest="command", required=True)
     mcp = sub.add_parser("mcp", help="Run the local MCP stdio server")
-    mcp.add_argument("--backend", choices=["ros", "stub"])
+    mcp.add_argument("--backend", choices=["none", "stub"])
     mcp.add_argument("--scenario", help="Synthetic scenario, requires --backend stub")
     smoke = sub.add_parser("smoke", help="Run one complete simulated test through real MCP")
     smoke.add_argument(
