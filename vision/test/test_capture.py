@@ -28,9 +28,7 @@ def test_motion_in_the_settle_window_rejects():
 
 
 def test_motion_before_the_window_is_fine():
-    _, reason = tag_wrist_frame(
-        Frame("left", 0.9, IMAGE), "left", history(velocity_at=0.5), CONFIG
-    )
+    _, reason = tag_wrist_frame(Frame("left", 0.9, IMAGE), "left", history(velocity_at=0.5), CONFIG)
     assert reason is None
 
 
