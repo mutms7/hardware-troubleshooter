@@ -1,0 +1,228 @@
+{
+  "opencv_version": "4.14.0",
+  "square_inches": 1.9,
+  "square_m": 0.04826,
+  "squares": [
+    8,
+    8
+  ],
+  "inner_corners": [
+    7,
+    7
+  ],
+  "input_images": 18,
+  "accepted_images": 18,
+  "model": "plumb_bob, k3 fixed to zero",
+  "overall_rms_px": 0.8303399059881408,
+  "recomputed_rms_px": 0.8303402972992677,
+  "overall_mean_px": 0.6102682899319103,
+  "max_corner_error_px": 4.541782692164165,
+  "camera_matrix": [
+    [
+      676.6884886628189,
+      0.0,
+      990.1318466027781
+    ],
+    [
+      0.0,
+      676.573796875363,
+      547.2832319594395
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_coefficients": [
+    0.054858302923624216,
+    -0.05419030055049873,
+    0.0010708827619024734,
+    -0.0005396799717455366,
+    0.0
+  ],
+  "images": [
+    {
+      "filename": "WIN_20261024_15_03_44_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.6002225370108362,
+      "mean_px": 0.47754017326345255,
+      "max_px": 1.7709356018334232
+    },
+    {
+      "filename": "WIN_20261024_15_03_25_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.8526680235554931,
+      "mean_px": 0.7370523819313435,
+      "max_px": 2.4641919485746553
+    },
+    {
+      "filename": "WIN_20261024_15_03_19_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 1.3189967704946572,
+      "mean_px": 1.136138844409102,
+      "max_px": 2.474624512778459
+    },
+    {
+      "filename": "WIN_20261024_15_03_17_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 2.202583351001883,
+      "mean_px": 1.9151563091368788,
+      "max_px": 4.541782692164165
+    },
+    {
+      "filename": "WIN_20261024_15_03_12_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.5807244916703626,
+      "mean_px": 0.47529218784458654,
+      "max_px": 1.597389211742426
+    },
+    {
+      "filename": "WIN_20261024_15_03_08_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.5171567623087913,
+      "mean_px": 0.42484893098086335,
+      "max_px": 1.3115095499365916
+    },
+    {
+      "filename": "WIN_20261024_15_03_48_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "repository full-resolution fallback",
+      "rms_px": 0.6923017728823498,
+      "mean_px": 0.5662306435577129,
+      "max_px": 1.7727013235283509
+    },
+    {
+      "filename": "WIN_20261024_15_03_57_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.8209842363264874,
+      "mean_px": 0.7068553256425024,
+      "max_px": 1.9243023803326391
+    },
+    {
+      "filename": "WIN_20261024_15_03_52_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.8264851130926835,
+      "mean_px": 0.70227666923146,
+      "max_px": 1.9790200454460667
+    },
+    {
+      "filename": "WIN_20261024_15_04_06_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.5667170206663821,
+      "mean_px": 0.47536029149653586,
+      "max_px": 1.464659358925455
+    },
+    {
+      "filename": "WIN_20261024_15_03_05_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.5482242387428798,
+      "mean_px": 0.46098230146159264,
+      "max_px": 1.4155262674903855
+    },
+    {
+      "filename": "WIN_20261024_15_02_53_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.49476724014921275,
+      "mean_px": 0.435445731145743,
+      "max_px": 1.1298961844363176
+    },
+    {
+      "filename": "WIN_20261024_15_02_49_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.4413591682472492,
+      "mean_px": 0.3756612300492064,
+      "max_px": 1.179549242162445
+    },
+    {
+      "filename": "WIN_20261024_15_02_33_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.4726589770329809,
+      "mean_px": 0.4049957236511254,
+      "max_px": 1.2061532020570962
+    },
+    {
+      "filename": "WIN_20261024_15_02_28_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.6034710511552324,
+      "mean_px": 0.5258728682531366,
+      "max_px": 1.5479345041748938
+    },
+    {
+      "filename": "WIN_20261024_15_02_22_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.4005156534380285,
+      "mean_px": 0.3475341649642161,
+      "max_px": 1.0968674245602947
+    },
+    {
+      "filename": "WIN_20261024_15_02_20_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.3788855141758487,
+      "mean_px": 0.3216586357476596,
+      "max_px": 0.9764666245988373
+    },
+    {
+      "filename": "WIN_20261024_15_03_06_Pro.jpg",
+      "detected": true,
+      "width": 1920,
+      "height": 1080,
+      "detection_method": "half-size SB, full-resolution subpixel refinement",
+      "rms_px": 0.5813832531734073,
+      "mean_px": 0.4959268060072666,
+      "max_px": 1.7417817939607085
+    }
+  ],
+  "detection_method": "Half-size SB detection followed by full-resolution cornerSubPix; all images retained if detected.",
+  "limitations": "In-sample fit errors, not independent validation or physical probe accuracy. Assumes one camera with unchanged intrinsics across all images."
+}

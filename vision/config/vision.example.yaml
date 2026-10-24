@@ -2,17 +2,47 @@
 # measurement on the real bench. Nothing is substituted with a default. Paths are
 # relative to this file.
 
-board_config: null          # registration board YAML (registration/config/board.example.yaml)
-rig_config: null            # registration rig YAML; its camera_extrinsic is the fixed camera's
-fixed_camera_info: null     # camera_calibration YAML for the fixed camera
+registration_source: wrist  # fixed is an explicit legacy board-edge mode only
+
+# Reference photo of the flat PCB surface with >=4 identified, measured landmarks.
+# Pixel coordinates and board_m coordinates must name the SAME physical features.
+# Crop/mask raised components and the probe out of the landmark region.
+board_reference:
+  board_id: null
+  image: null
+  camera_info: null         # intrinsics of the camera that took the reference photo
+  landmarks: []
+  # - {pixel: [u, v], board_m: [x, y]}   # metres, same frame as pads below
+  ratio: null               # descriptor ratio test, strictly between 0 and 1
+  ransac_px: null           # correspondence rejection threshold in ideal pixels
+  min_matches: null         # integer >=4, spread across the board surface
+
+homing:
+  min_points: null                 # integer >=4, shared physical features in both views
+  min_lateral_baseline_m: null     # measured sideways camera translation
+  step_m: null                    # requested sideways step along camera +x
+  max_baseline_m: null
+  min_parallax_rad: null
+  max_pair_interval_s: null
+  max_reprojection_error_px: null  # both individual views and their joint fit
+  max_pose_translation_m: null    # independent board poses must agree in the rig
+  max_pose_rotation_rad: null
+  min_pose_margin_px: null        # reject competing solutions with similar fit error
+  max_triangulation_error_m: null # reconstructed features vs the metric board model
+  tracking_timeout_s: null        # fresh wrist confirmation required before expiry
+
+# Only legacy registration_source: fixed consumes these three fields.
+board_config: null
+rig_config: null
+fixed_camera_info: null
 
 arms: {}
 #  left:
 #    arm_config: null        # arm description YAML (arm/config/arm.example.yaml)
-#    calibration: null       # optional arm calibration YAML; without it values are nominal
+#    calibration: null       # measured joint_map and wrist_camera REQUIRED for homing
 #    wrist_camera_info: null # camera_calibration YAML for this arm's wrist camera
 #    base_in_rig:            # base_link pose in the rig base frame (the URDF base is Y-up)
-#      xyz_m: null
+#      xyz_m: null            # identity is valid if this arm's base defines the rig frame
 #      rpy_rad: null
 
 pads:                       # pad geometry for wrist alignment, never from images

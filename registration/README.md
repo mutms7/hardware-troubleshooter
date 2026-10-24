@@ -1,5 +1,10 @@
 # Board registration (CV)
 
+This is the standalone **legacy fixed-camera** board-edge engine. The default
+[vision service](../vision/README.md) now uses two-view wrist-camera homing with
+measured motion and triangulation. Its fixed camera is RGB overview only; this
+library's bench-plane/extrinsic requirements don't apply to that path.
+
 Board-edge registration of a clamped PCB from the rig's fixed camera, not the camera
 mounted on the arm. It's a plain Python library (numpy, OpenCV, PyYAML) with no
 middleware. There's no AprilTag, motion, measurement, or MCP code here, and no

@@ -59,3 +59,17 @@ def test_history_ignores_out_of_order_and_ages_out():
     h.add(JointSample(2.5, (0,), (0,)))
     assert h.window(0, 3) == [h.latest]
     assert h.nearest(2.0).stamp == 2.5
+
+
+def test_missing_velocity_nan_and_feedback_gap_reject():
+    for velocities in ((), (float("nan"),) * 7):
+        h = JointHistory()
+        for stamp in np.arange(0, 1, 0.005):
+            h.add(JointSample(float(stamp), (0.0,) * 7, velocities))
+        _, reason = tag_wrist_frame(Frame("left", 0.9, IMAGE), "left", h, CONFIG)
+        assert reason.startswith("invalid_joint_state")
+    h = JointHistory()
+    for stamp in [0.7, 0.705, 0.89, 0.895, 0.9]:
+        h.add(JointSample(stamp, (0.0,) * 7, (0.0,) * 7))
+    _, reason = tag_wrist_frame(Frame("left", 0.9, IMAGE), "left", h, CONFIG)
+    assert reason == "arm_not_settled:gap in joint feedback"

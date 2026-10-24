@@ -11,12 +11,14 @@ from hardware_troubleshooter_registration.camera import CameraModel
 from hardware_troubleshooter_vision import transforms
 from hardware_troubleshooter_vision.calibration import (
     CharucoTarget,
+    CheckerboardTarget,
     arm_calibration_dict,
     base_in_rig,
     bench_plane,
     calibrate_intrinsics,
     calibrate_joint_offsets,
     detect_charuco,
+    detect_checkerboard,
     eye_in_hand,
     eye_to_hand,
     pose_from_matrix,
@@ -36,10 +38,17 @@ def random_pose(rng, angle=0.4, distance=0.35):
     return transforms.transform(rotation, translation - rotation @ centre)
 
 
-def render_target(camera, camera_from_target, px_per_m=4000, supersample=3):
-    width = int(TARGET.squares_x * TARGET.square_m * px_per_m)
-    height = int(TARGET.squares_y * TARGET.square_m * px_per_m)
-    board_image = TARGET.board().generateImage((width, height), marginSize=0)
+def render_target(camera, camera_from_target, px_per_m=4000, supersample=3, target=TARGET):
+    if isinstance(target, CheckerboardTarget):
+        square_px = round(target.square_m * px_per_m)
+        rows, cols = np.indices((target.corners_y + 1, target.corners_x + 1))
+        board_image = np.kron(
+            ((rows + cols) % 2 * 255).astype(np.uint8), np.ones((square_px, square_px), np.uint8)
+        )
+    else:
+        width = int(target.squares_x * target.square_m * px_per_m)
+        height = int(target.squares_y * target.square_m * px_per_m)
+        board_image = target.board().generateImage((width, height), marginSize=0)
     h, w = camera.height * supersample, camera.width * supersample
     us, vs = np.meshgrid(np.arange(w), np.arange(h))
     raw = np.column_stack(
@@ -49,6 +58,9 @@ def render_target(camera, camera_from_target, px_per_m=4000, supersample=3):
     target_from_camera = transforms.invert(camera_from_target)
     origin, directions = target_from_camera[:3, 3], rays @ target_from_camera[:3, :3].T
     points = origin[:2] + directions[:, :2] * (-origin[2] / directions[:, 2])[:, None]
+    # The checkerboard origin is its first inner corner, one square inside the print.
+    if isinstance(target, CheckerboardTarget):
+        points = points + target.square_m
     maps = (points * px_per_m - 0.5).astype(np.float32).reshape(h, w, 2)
     image = cv2.remap(board_image, maps[..., 0], maps[..., 1], cv2.INTER_LINEAR, borderValue=255)
     return cv2.resize(image, (camera.width, camera.height), interpolation=cv2.INTER_AREA)
@@ -80,6 +92,82 @@ def test_intrinsics_from_synthetic_views(camera):
 def test_too_few_views():
     with pytest.raises(ValueError, match="at least"):
         calibrate_intrinsics([])
+
+
+def test_checkerboard_intrinsics_and_verified_pose(camera):
+    target = CheckerboardTarget(6, 4, 0.02)
+    rng = np.random.default_rng(12)
+    detections = []
+    for _ in range(12):
+        truth = random_pose(rng, angle=0.4, distance=0.35)
+        image = render_target(camera, truth, target=target)
+        detection = detect_checkerboard(image, target)
+        assert detection is not None
+        assert not detection.pose_order_verified
+        assert len(detection.ids) == 24
+        with pytest.raises(ValueError, match="corner order"):
+            target_pose(detection, camera)
+        detections.append(detection)
+        expected = camera.project_ideal(transforms.apply(truth, target.object_points()))
+        ideal = camera.undistort_px(detection.image_points)
+        # Test ground truth supplies the physical origin, never image-based guessing.
+        reverse = bool(
+            np.linalg.norm(ideal[-1] - expected[0]) < np.linalg.norm(ideal[0] - expected[0])
+        )
+        verified = detect_checkerboard(image, target, reverse_order=reverse)
+        pose, rms = target_pose(verified, camera)
+        assert rms < 0.5
+        assert pose[:3, 3] == pytest.approx(truth[:3, 3], abs=1e-3)
+        assert transforms.rotation_angle(pose[:3, :3].T @ truth[:3, :3]) < math.radians(1)
+    info, rms = calibrate_intrinsics(detections)
+    recovered, problem = CameraModel.from_calibration_yaml(info)
+    assert problem is None
+    assert rms < 0.5
+    assert recovered.k[0, 0] == pytest.approx(500, rel=0.02)
+    assert recovered.k[:2, 2] == pytest.approx([320, 240], abs=4)
+
+
+def test_checkerboard_blank_and_reversed_order(camera):
+    target = CheckerboardTarget(6, 4, 0.02)
+    assert detect_checkerboard(np.full((480, 640), 255, np.uint8), target) is None
+    image = render_target(camera, random_pose(np.random.default_rng(1)), target=target)
+    forward = detect_checkerboard(image, target, reverse_order=False)
+    reverse = detect_checkerboard(image, target, reverse_order=True)
+    assert forward.pose_order_verified and reverse.pose_order_verified
+    assert np.allclose(forward.image_points, reverse.image_points[::-1])
+
+
+def test_checkerboard_with_black_border_and_white_band():
+    target = CheckerboardTarget(6, 4, 0.02)
+    rows, cols = np.indices((5, 7))
+    grid = np.kron(((rows + cols) % 2 * 255).astype(np.uint8), np.ones((40, 40), np.uint8))
+    bordered = cv2.copyMakeBorder(grid, 3, 3, 3, 3, cv2.BORDER_CONSTANT, value=0)
+    image = cv2.copyMakeBorder(bordered, 40, 40, 40, 40, cv2.BORDER_CONSTANT, value=255)
+    detection = detect_checkerboard(image, target)
+    assert detection is not None
+    assert detection.image_points.shape == (24, 2)
+    # Only inner intersections count; neither border contributes corners.
+    expected = target.object_points()[:, :2] / target.square_m * 40 + 82.5
+    actual = detection.image_points
+    assert min(np.abs(actual - expected).max(), np.abs(actual[::-1] - expected).max()) < 0.5
+
+
+@pytest.mark.parametrize(
+    "x,y,size",
+    [
+        (2, 4, 0.02),
+        (6, 2, 0.02),
+        (6.5, 4, 0.02),
+        (True, 4, 0.02),
+        (6, 4, 0),
+        (6, 4, -1),
+        (6, 4, float("nan")),
+        (6, 4, float("inf")),
+    ],
+)
+def test_checkerboard_invalid_geometry(x, y, size):
+    with pytest.raises(ValueError):
+        CheckerboardTarget(x, y, size)
 
 
 def test_target_pose_and_bench_plane(camera):

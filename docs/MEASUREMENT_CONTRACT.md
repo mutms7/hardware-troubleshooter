@@ -45,9 +45,15 @@ MCP preserves unparseable log entries as raw strings for debugging.
 ## Stages and progress
 
 Feedback contains stage and attempt. Use descriptive stages such as PRECHECK,
-RESOLVE, PLAN, APPROACH, VERIFY_POSITION, VERIFY_CONTACT, ACQUIRE, STOP, RETRACT.
+RESOLVE, HOME_BOARD, PLAN, APPROACH, VERIFY_POSITION, VERIFY_CONTACT, ACQUIRE, STOP, RETRACT.
 MCP forwards changes as progress messages when a client supplies a progress token.
 The stage count isn't a time estimate.
+
+HOME_BOARD uses two settled wrist views with measured lateral camera movement before
+approaching each requested pad. The resulting registration revision belongs to that
+arm/target and must remain valid through local alignment. A scene change, expired
+observation or changed calibration revokes it. Fixed-camera RGB overview can revoke
+a pose, but its depth or a fixed-camera PnP pose isn't required to create one.
 
 The orchestrator owns per-stage and overall deadlines. Before motion and before
 acquisition, verify registration, reference state, limits, position, and contact as
