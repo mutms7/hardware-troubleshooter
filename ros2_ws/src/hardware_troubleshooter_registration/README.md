@@ -1,6 +1,7 @@
 # Board registration (CV)
 
-Board-edge registration of a clamped PCB from one fixed camera. It serves the shared
+Board-edge registration of a clamped PCB from the rig's fixed camera, not the camera
+mounted on the arm. It serves the shared
 `GetRegistration`/`RegistrationState` contract from `hardware_troubleshooter_interfaces`
 unchanged. There's no AprilTag, motion, measurement, or MCP code here, and no
 electrical identity is inferred from images.
@@ -135,8 +136,11 @@ and say nothing about accuracy on a real rig.
 
 ## Known limits
 
-- One fixed camera. A camera on the arm would change the extrinsic every frame and
-  trigger `calibration_changed` continuously.
+- Fixed camera only. The rig also has a camera on the arm, and pointing this node at
+  it fails closed: each arm move changes `base_frame <- camera` and invalidates the
+  revision with `calibration_changed`. Registering from the arm camera would need the
+  bench plane and the revision pose kept in the base frame, with TF looked up at each
+  image stamp. That isn't implemented.
 - Convex-ish outlines whose straight edges dominate. Notches shorter than the
   corner trim, round boards, and footprint-level Edge.Cuts aren't supported.
 - Contour points sit on boundary pixels, a sub-pixel inward bias. A gradient-based

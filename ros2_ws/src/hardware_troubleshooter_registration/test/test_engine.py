@@ -231,6 +231,24 @@ def test_extrinsic_change_publishes_calibration_changed(scene, registered):
     assert events[0].registration_id.endswith("/r1")
 
 
+def test_moving_camera_never_stays_valid(scene, registered):
+    """The arm camera's extrinsic changes as the arm moves; every revision must fall."""
+    engine, pose = registered
+    for i in range(1, 4):
+        stamp = 1.0 + 0.2 * i
+        engine.set_extrinsic((EXTRINSIC[0] + 0.01 * i, EXTRINSIC[1]), None, stamp)
+        assert engine.snapshot(stamp).status != "valid"
+        assert engine.tf_to_publish(stamp) is None
+        feed(engine, scene, pose, stamp + 0.1)  # re-registers under the new extrinsic
+    changed = [
+        e
+        for e in engine.drain_events()
+        if e.reasons and e.reasons[0].startswith("calibration_changed")
+    ]
+    assert [e.registration_id[-2:] for e in changed] == ["r1", "r2", "r3"]
+    assert "needs the fixed camera" in changed[0].reasons[0]
+
+
 def test_intrinsics_change_publishes_calibration_changed(scene, registered):
     engine, pose = registered
     info = copy.deepcopy(SYNTHETIC_CAMERA_INFO)

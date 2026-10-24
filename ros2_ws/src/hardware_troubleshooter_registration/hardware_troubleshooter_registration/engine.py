@@ -4,6 +4,10 @@ A revision's pose is fixed when it is created. Later frames only confirm it (wit
 the move thresholds) or invalidate it. An invalidated revision is never reported
 valid again; the next accepted frame creates a new revision.
 
+Run it on the rig's fixed camera. The base -> camera transform must stay constant
+for a revision's lifetime; on the arm-mounted camera every arm move changes it and
+invalidates the revision with calibration_changed.
+
 failure_reason entries are "code" or "code:detail", joined with "; ". When the
 latest revision was invalidated, the first entry is board_moved, tracking_lost or
 calibration_changed.
@@ -192,7 +196,11 @@ class RegistrationEngine:
             if live.extrinsic is None:
                 live.extrinsic = extrinsic
             elif np.max(np.abs(np.concatenate(live.extrinsic) - np.concatenate(extrinsic))) > 1e-9:
-                self._invalidate(CALIBRATION_CHANGED, "camera extrinsic changed", now)
+                self._invalidate(
+                    CALIBRATION_CHANGED,
+                    "camera extrinsic changed (registration needs the fixed camera)",
+                    now,
+                )
         self._queue_event(now)
 
     # --- outputs ------------------------------------------------------------------

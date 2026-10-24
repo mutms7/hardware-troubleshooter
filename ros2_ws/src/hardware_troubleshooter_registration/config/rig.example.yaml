@@ -1,9 +1,11 @@
 # Per-rig registration config. Every value is unset; fill each one from a calibration
 # or a measurement on the real bench. The node never substitutes defaults.
 
-base_frame: null        # arm base TF frame; board -> base is looked up through TF
+# Registration runs on the fixed camera. Its base -> camera transform must not change.
+base_frame: null        # arm base TF frame, e.g. so_arm_description's base link with that
+                        # arm's frame_prefix; board -> base is looked up through TF
 
-# Bench plane in the camera optical frame: points X on the bench satisfy n . X = d.
+# Bench plane in the fixed camera's optical frame: points X on the bench satisfy n . X = d.
 # n points from the camera toward the bench. Measure it, e.g. with a calibration
 # target lying flat on the bench.
 bench_plane:
@@ -23,6 +25,6 @@ thresholds:
 # Read only by the launch file when publish_extrinsic:=true. Leave it unset if
 # another node already publishes base -> camera.
 camera_extrinsic:
-  camera_frame: null        # camera optical frame id, as in the image header
+  camera_frame: null        # fixed camera's optical frame id, as in its image header
   translation_m: null       # [x, y, z] of the camera in base_frame
   rotation_xyzw: null       # [x, y, z, w] of the camera in base_frame
