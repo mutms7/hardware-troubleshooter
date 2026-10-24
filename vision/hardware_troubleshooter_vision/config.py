@@ -129,7 +129,55 @@ class ArmEntry:
 
 
 @dataclass(frozen=True)
+class HomingConfig:
+    min_points: float | None = None
+    min_lateral_baseline_m: float | None = None
+    step_m: float | None = None
+    max_baseline_m: float | None = None
+    min_parallax_rad: float | None = None
+    max_pair_interval_s: float | None = None
+    max_reprojection_error_px: float | None = None
+    max_pose_translation_m: float | None = None
+    max_pose_rotation_rad: float | None = None
+    min_pose_margin_px: float | None = None
+    max_triangulation_error_m: float | None = None
+    tracking_timeout_s: float | None = None
+
+    def missing(self) -> list[str]:
+        return _missing(self, "homing")
+
+
+@dataclass(frozen=True)
+class BoardReference:
+    board_id: str | None = None
+    image: Path | None = None  # RGB/intensity only; depth isn't used
+    landmarks: tuple = ()  # {pixel: [u,v], board_m: [x,y]}; >=4 on the top surface
+    ratio: float | None = None
+    ransac_px: float | None = None
+    min_matches: float | None = None
+    camera_info: Path | None = None  # intrinsics used to capture the reference image
+
+    def missing(self) -> list[str]:
+        return [
+            f"board_reference.{key}"
+            for key in (
+                "board_id",
+                "image",
+                "landmarks",
+                "ratio",
+                "ransac_px",
+                "min_matches",
+                "camera_info",
+            )
+            if getattr(self, key) is None or getattr(self, key) == ()
+        ]
+
+
+@dataclass(frozen=True)
 class VisionConfig:
+    registration_source: str = "wrist"  # fixed is an explicit legacy mode only
+    homing: HomingConfig = field(default_factory=HomingConfig)
+    board_reference: BoardReference = field(default_factory=BoardReference)
     board_config: Path | None = None  # registration board YAML
     rig_config: Path | None = None  # registration rig YAML
     fixed_camera_info: Path | None = None
@@ -143,6 +191,8 @@ class VisionConfig:
     thermal: ThermalConfig = field(default_factory=ThermalConfig)
 
     def missing_for_registration(self) -> list[str]:
+        if self.registration_source == "wrist":
+            return self.homing.missing() + self.board_reference.missing()
         return [
             key
             for key in ("board_config", "rig_config", "fixed_camera_info")
@@ -241,7 +291,49 @@ def vision_from_dict(data: dict, base_dir: Path) -> tuple[VisionConfig, list[str
         homography, _positive(thermal_raw.get("min_delta_c"), "thermal.min_delta_c", problems)
     )
 
+    source_mode = data.get("registration_source", "wrist")
+    if source_mode not in ("wrist", "fixed"):
+        problems.append("invalid:registration_source (use wrist or fixed)")
+        source_mode = "wrist"
+    homing = _numbers(HomingConfig, data.get("homing") or {}, "homing", problems)
+    for key in ("min_points",):
+        value = getattr(homing, key)
+        if value is not None and (value < 4 or not value.is_integer()):
+            problems.append(f"invalid:homing.{key} (integer >= 4 required)")
+    if (
+        all(
+            getattr(homing, k) is not None
+            for k in ("min_lateral_baseline_m", "step_m", "max_baseline_m")
+        )
+        and not homing.min_lateral_baseline_m <= homing.step_m <= homing.max_baseline_m
+    ):
+        problems.append(
+            "invalid:homing (require min_lateral_baseline_m <= step_m <= max_baseline_m)"
+        )
+    reference_raw = data.get("board_reference") or {}
+    board_id = reference_raw.get("board_id")
+    if board_id is not None and (not isinstance(board_id, str) or not board_id.strip()):
+        problems.append("invalid:board_reference.board_id (nonempty string required)")
+        board_id = None
+    reference = BoardReference(
+        board_id,
+        path(reference_raw.get("image"), "board_reference.image"),
+        tuple(reference_raw.get("landmarks") or ()),
+        _positive(reference_raw.get("ratio"), "board_reference.ratio", problems),
+        _positive(reference_raw.get("ransac_px"), "board_reference.ransac_px", problems),
+        _positive(reference_raw.get("min_matches"), "board_reference.min_matches", problems),
+        path(reference_raw.get("camera_info"), "board_reference.camera_info"),
+    )
+    if reference.ratio is not None and reference.ratio >= 1:
+        problems.append("invalid:board_reference.ratio (must be < 1)")
+    if reference.min_matches is not None and (
+        reference.min_matches < 4 or not reference.min_matches.is_integer()
+    ):
+        problems.append("invalid:board_reference.min_matches (integer >= 4 required)")
     return VisionConfig(
+        registration_source=source_mode,
+        homing=homing,
+        board_reference=reference,
         board_config=path(data.get("board_config"), "board_config"),
         rig_config=path(data.get("rig_config"), "rig_config"),
         fixed_camera_info=path(data.get("fixed_camera_info"), "fixed_camera_info"),

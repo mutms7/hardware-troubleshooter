@@ -15,6 +15,7 @@ import bisect
 import time
 from collections import deque
 from dataclasses import dataclass
+from itertools import pairwise
 
 import numpy as np
 
@@ -83,6 +84,8 @@ def tag_wrist_frame(
     sample = history.nearest(frame.stamp)
     if sample is None:
         return None, "no_joint_state"
+    if not np.isfinite(frame.stamp):
+        return None, "invalid_frame_stamp"
     skew = abs(sample.stamp - frame.stamp)
     if skew > config.max_joint_skew_s:
         return None, f"joint_state_skew:{skew:.4f}s from the image stamp"
@@ -90,6 +93,15 @@ def tag_wrist_frame(
     window = history.window(start, frame.stamp + config.max_joint_skew_s)
     if not window or window[0].stamp - start > config.max_joint_skew_s:
         return None, "arm_not_settled:joint history doesn't cover the settle window"
+    if any(
+        len(s.positions) != 7
+        or len(s.velocities) != 7
+        or not np.isfinite((*s.positions, *s.velocities, s.stamp)).all()
+        for s in window
+    ):
+        return None, "invalid_joint_state:need seven measured finite positions and velocities"
+    if any(b.stamp - a.stamp > 2 * config.max_joint_skew_s for a, b in pairwise(window)):
+        return None, "arm_not_settled:gap in joint feedback"
     peak = max(max((abs(v) for v in s.velocities), default=0.0) for s in window)
     if peak > config.settle_velocity_rad_s:
         return None, f"arm_not_settled:joint speed {peak:.4f} rad/s in the settle window"

@@ -1,236 +1,173 @@
-# Vision stack
+# Wrist-camera homing and pad alignment
 
-The CV around the measurement orchestrator. There are three cameras: the fixed camera
-beside the bench, looking down at roughly 45 degrees, and one wrist camera on each
-Maker Arm's `link_007`. Calibration measures the actual fixed camera pose; the
-mounting angle isn't assumed by registration. The AMG8833 thermal
-sensor adds hints on top. It's a plain Python library (numpy, OpenCV, PyYAML) that
-uses [registration/](../registration/README.md) and [arm/](../arm/README.md). It never
-moves an arm, and nothing it reports is evidence of electrical contact.
+The arm-mounted camera establishes the PCB pose. Before approaching a pad, capture
+one settled wrist view, move sideways, capture another settled view, and jointly fit
+one metric board pose against both images and the **measured** camera movement.
+Triangulation of shared features independently checks the fit. Then approach the pad
+and finish with local wrist-camera alignment.
 
-| Camera | Job | Module |
-| --- | --- | --- |
-| Fixed | Where the board is in the rig, and whether it moved, even with an arm over it | registration engine, `occlusion.py` |
-| Fixed | Anything in the workspace that shouldn't be | `scene.py` |
-| Wrist | Where this tool will land relative to the target pad, and the correction | `alignment.py` |
-| Thermal | Which part of the registered board runs hot | `thermal.py` |
+The fixed camera is a depth-capable camera beside the bench at roughly 45 degrees.
+Its RGB/intensity stream is an optional overview. Neither depth nor fixed-camera PnP
+is used in the default flow. No fixed camera intrinsics, bench plane or camera-to-rig
+extrinsic is required for wrist homing.
 
-The wrist cameras never register the board. Every arm move changes their extrinsic, so
-they only measure locally: target pad versus tool tip in the same image. Most of the
-registration and kinematic error cancels out of that comparison.
+This Python library uses numpy, OpenCV 4.x and PyYAML. It doesn't open hardware or
+command motors by itself. `home_target` runs capture/move/capture through async
+adapters supplied by the orchestrator. The motion adapter owns bounded movement,
+collision checks and guarded stop. Nothing here proves electrical contact.
 
-## Using it
+## Configuration and board identification
 
-`VisionService` loads everything from one YAML and is the orchestrator's single
-API. The caller owns the cameras, the arm SDK, the clock and the transport. Stamp
-every joint sample and frame with the same clock (`time.monotonic()` by default).
+Start with [config/vision.example.yaml](config/vision.example.yaml). Physical values
+and acceptance limits stay unset until measured on the rig.
+
+- `registration_source: wrist` is the default. Explicit `registration_source: fixed`
+  retains the standalone legacy board-edge engine for old callers and regression tests.
+- Each arm needs camera intrinsics, a measured `joint_map` and a measured
+  `wrist_camera` hand-eye transform in its calibration YAML. Nominal CAD mounts don't
+  authorize homing. `base_in_rig` locates the arm in a common frame; use an explicit
+  identity if this arm's base defines that frame.
+- Pads come from KiCad or a measured registry, in the same board frame as the homing
+  reference. Electrical identities aren't inferred from photos.
+- `homing` configures measured lateral baseline, requested step, maximum baseline,
+  minimum parallax, shared feature count, pose consistency, per-view/joint reprojection
+  limits, triangulation error, ambiguity margin and tracking lifetime. The requested
+  step must be between the minimum and maximum baseline limits.
+- `board_reference` provides a photo and its camera intrinsics, plus at least four
+  identified, noncollinear `pixel` -> `board_m` landmarks. Use actual corresponding
+  physical features, not an unordered cyclic contour. An asymmetric feature resolves
+  orientation. Coordinates describe the top surface, z=0, in metres.
+
+`BoardFeatureDetector` matches SIFT texture inside the reference landmarks' convex
+hull. It removes reference lens distortion to assign metric board coordinates, then
+matches reference features to wrist images. A RANSAC homography rejects inconsistent
+matches; metric PnP estimates pose. Select a region of the flat PCB surface. Raised
+components, probe pixels, glare and repetitive pads can invalidate the planar model.
+Texture needs to be spread over the board. This is reference matching, not learned
+PCB segmentation, and doesn't depend on the board being brighter than the bench.
+
+An identified-feature adapter may instead pass `BoardObservation` to `observe_board`
+and `align`: stable physical feature IDs, known board points and raw image pixels.
+
+## Homing, approach and final alignment
 
 ```python
-from hardware_troubleshooter_vision.capture import Frame, JointSample, OpenCVCamera
-from hardware_troubleshooter_vision.service import VisionService
+vision, problems = VisionService.load("vision.yaml", session_id)
+if problems:
+    raise ValueError(problems)
 
-vision, problems = VisionService.load("vision.yaml", session_id)  # problems lists every unset value
+# async acquire_settled(arm) -> (Frame, list[JointSample]) covering the settle window
+# async move_relative(arm, delta_base_m) -> bool; the adapter guards the move
+result = await vision.home_target("left", "U1.1", acquire_settled, move_relative)
+if not result.ok:
+    raise RuntimeError(result.reasons)
 
-vision.add_joint_sample("left", JointSample(stamp, positions, velocities, torques))
-vision.process_fixed_frame(fixed_camera.read())  # registration, both arms masked
-vision.tick(now)                                 # so a stalled camera still times out
-
-vision.board_state(now)               # registration Snapshot: status, reasons, pose
-vision.base_from_board("left", now)   # 4x4 left base_link <- board, None unless valid
-vision.scene_clear(fixed_camera.read())  # SceneResult(clear, reasons, blobs)
-
-out = vision.align("left", wrist_camera.read(), "U1.1", "probe")
-out.ok, out.result.error_m, out.result.aligned  # target - tip landing point
-out.correction_base_m                           # move the tool by this, base frame
+point_base_m, board_normal_base = vision.pad_approach("left", "U1.1", standoff_m, now)
+# Orchestrator: move the calibrated tool TIP to point_base_m at the right orientation
+# using calibrated TCP/IK; feed measured joint feedback continuously.
+out = vision.align("left", settled_wrist_frame, "U1.1", "probe")
+if out.ok:
+    correction_base_m = out.correction_base_m
+# Correct, settle, capture and align again until out.result.aligned.
 ```
 
-### Fixed camera
+All stamps use one monotonic clock. Wrist camera IDs are `<arm>_wrist`; resolution
+must match the camera matrix. Each accepted image needs seven finite measured joint
+positions/velocities with continuous feedback across the settle window.
 
-`process_fixed_frame` projects each arm's URDF collision meshes, at its joint sample
-nearest the frame stamp, into the fixed image. It passes that mask to registration,
-which then confirms or invalidates the board from the edges still in view. A board
-pushed under an arm is still caught as `board_moved`.
+The lower-level sequence is `begin_homing`, `observe_board`, `homing_step_base_m`,
+then `observe_board` again. One view never authorizes a transform. The requested step
+is along camera +x expressed in the arm base; it isn't evidence of movement. Actual
+camera translation AND rotation come from measured joints and calibrated hand-eye.
 
-- **Mask construction:** each mesh part is filled as its convex hull and grown by
-  `occlusion.margin_px`, so the mask errs toward hiding more. A part wholly outside
-  the view frustum is skipped. One straddling the camera plane inside it masks
-  everything.
-- **Missing joint state:** an arm without a joint sample within
-  `capture.max_joint_skew_s` masks the whole image. Its position is unknown, so
-  registration can't confirm through it.
-- **Threshold:** set `rig.thresholds.min_visible_edge_fraction` in the registration
-  rig YAML, or occluded frames stay unconfirmed.
+The solver retains IPPE alternatives and an iterative seed for singular front-facing
+orientations, checks pose consistency in the rig, then jointly refines a shared pose.
+It rejects similar competing solutions, poor per-view/joint fit, inadequate shared
+features, changed geometry, insufficient lateral translation/parallax, negative depth
+and excessive triangulation error. It never averages PnP poses or treats a commanded
+displacement as ground truth. The board must stay stationary across the two views.
 
-### Wrist alignment
+`board_state(now)` reports validity, revision, expiry, arm/target ownership,
+calibration revision, baseline, parallax, per-view RMS and triangulation RMS.
+`base_from_board` only returns a valid pose for the homing arm. Each homing stage gets
+a new revision scoped to one target; a different pad requires another homing stage.
+Concurrent `home_target` calls are rejected.
 
-`align` refuses unless the frame was taken with the arm settled, the requested tool is
-selected, and registration is valid. Settled means every joint was below
-`capture.settle_velocity_rad_s` for `capture.settle_duration_s`, with a joint sample
-within `max_joint_skew_s` of the image. The tool check uses the measured toolhead
-angle. Then it:
+`align` first confirms the board against the current measured camera pose. A missing
+observation blocks alignment. Board movement, expiry, calibration changes or explicit
+`invalidate_board()` require fresh homing; a revoked revision cannot become valid
+through another confirmation. Local pad alignment additionally requires a selected
+tool, calibrated landing pixel, matching stand-off and a strong, unique copper match.
+The correction is target minus tool landing point, expressed in the arm base.
 
-1. predicts board -> wrist camera from registration and measured joints at the stamp,
-2. resamples the wrist image onto the board plane around the target at
-   `alignment.resolution_m`,
-3. renders the copper within `patch_radius_m` from the pad geometry and finds it by
-   normalised correlation within `search_radius_m`,
-4. maps the tool's calibrated tip pixel through the same prediction to its landing point,
-5. returns target minus landing point, in the board plane and in the arm base.
+## Fixed RGB overview
 
-The tip pixel is valid only at the stand-off it was calibrated at. Hover there (within
-`max_standoff_error_m`) or the alignment refuses. Repeat align, move, align until
-`aligned` (error within `converged_m`). On synthetic views with a 0.8 mm / 0.3°
-registration error, the error is measured to 15 µm and one correction converges.
+`capture_scene_reference(frame)` stores an overview reference. In wrist mode,
+`process_fixed_frame(frame, arm_mask=None)` and `scene_clear(frame)` only compare
+images. A changed/unobservable scene revokes wrist homing; a clear frame cannot create
+or restore it. The PCB isn't excluded from the comparison. No depth is read.
 
-Failure reasons: `arm_not_settled`, `joint_state_skew`, `no_joint_state`,
-`tool_not_selected`, `unknown_tool`, `registration_invalid`, `unknown_target`,
-`tip_pixel_uncalibrated`, `standoff_mismatch`, `target_not_in_view`,
-`no_pad_contrast`, `match_weak`, `match_ambiguous`, `match_at_search_edge`,
-`unconfigured:<key>`.
-
-`match_ambiguous` is the important one. A regular row of identical pads, such as IC
-pins, matches nearly as well one pitch over. The best match must beat the best match
-elsewhere by `min_uniqueness_margin`. A larger `patch_radius_m` takes in the row's
-ends or other parts and breaks the tie.
-
-Pads come from the board's `.kicad_pcb` (front copper, named `REF.number`) or a
-measured list. They never come from an image.
-
-### Contact
-
-`contact.TouchdownDetector` flags a sustained step in measured torque on the watched
-joints, relative to a baseline averaged before the descent. It says the tip met
-something. The alignment before descent says where, and only the AD3 can say the
-contact is electrical. There's no image check at contact: the tip covers the pad then,
-and the tip pixel is only valid at its stand-off.
-
-### Thermal
-
-Calibrate `thermal.homography` once with `thermal_homography`, from four or more warm
-points seen by both the thermal sensor and the fixed camera. With the board registered,
-`cells_on_board` gives every cell a board position, and `hot_spot` names the pads
-nearest the hottest cell that stands `min_delta_c` above the board's median. A cell is
-centimetres wide, so this is a hint, not a measurement.
+A caller-supplied image-space arm mask may suppress known arm pixels. Without it,
+arm movement can conservatively invalidate homing. Automatic URDF masks aren't used
+because no fixed-camera geometry is assumed. Overview checks aren't a claim of
+continuous monitoring. Feed them if used, call `invalidate_board("board_moved")` on
+fixture movement, and call `tick(now)` to expire stale wrist evidence. An unchanged
+overview cannot confirm a PCB hidden by an arm.
 
 ## Calibration
 
-`calibration.py` holds the offline steps, in this order on a new rig:
+The images supplied on 2026-10-24 calibrate **one arm-mounted camera** at 1920x1080,
+not the fixed camera or the other wrist camera. Its matrices are saved in
+[calibrations/wrist-camera-20261024.yaml](calibrations/wrist-camera-20261024.yaml);
+the companion JSON records all 18 view errors. The target has 8x8 squares, 7x7 inner
+corners and 1.9-inch (0.04826 m) spacing. Overall RMS is 0.830340 pixels, k3 fixed at
+zero. Assign this file only to the camera that took those photos, at the same image
+resolution and lens/focus settings. It doesn't establish hand-eye, TCP or metric
+positioning accuracy.
 
-1. **Intrinsics:** run `calibrate_intrinsics` per camera on plain checkerboard views
-   (`CheckerboardTarget`, `detect_checkerboard`). It writes camera_calibration YAML.
-   k3 is held at zero unless the
-   views reach the image corners.
-2. **Bench plane:** run `bench_plane` from `target_pose` of a target lying flat on the
-   bench, seen by the fixed camera. The result goes in the registration rig YAML.
-3. **Joint zeros:** run `calibrate_joint_offsets` with a target on `link_007`, 25 or
-   more varied poses, and the fixed camera watching. It fits J2–J5 offsets and gives
-   camera <- base. `base_in_rig` turns that into the arm's `base_in_rig`. J1 and J6
-   offsets aren't observable this way. J1 ends up in `base_in_rig`, and J6 is absorbed
-   consistently by everything mounted on `link_007`.
-4. **Wrist camera:** run `eye_in_hand` with views of a fixed target, using the fitted
-   joint map.
-5. **Tip pixel per tool:** run `tip_pixel_from_marks`. Touch the tip to a dark dot,
-   retract straight up by the stand-off, and capture. Repeat three or more times.
+`calibration.py` supplies these offline steps:
 
-`arm_calibration_dict` writes the result in the arm package's calibration layout. Every
-function reports a residual, but none decides whether it's acceptable. Record the
-residuals and set limits from the real rig. Re-zeroing a motor (`maker-arm zero`)
-invalidates step 3 onward.
+1. `CheckerboardTarget(corners_x, corners_y, square_m)`, `detect_checkerboard` and
+   `calibrate_intrinsics` for each camera's lens calibration. Count inner corners,
+   not squares. Vary distance, tilt and position, with coverage near the image edges.
+   The five-view minimum is an input check, not evidence of adequate coverage.
+2. `target_pose` for identified target poses. For a plain checkerboard, inspect the
+   corner order against an external origin/axis mark in every image. Pass
+   `reverse_order=False` to confirm it or `True` to reverse it. Omit it for intrinsics
+   only. Reject views where neither ordering matches the physical axes, especially
+   square grids. The mark isn't detected automatically.
+3. `eye_in_hand` for link <- camera from a stationary target and varied measured arm
+   poses. `calibrate_joint_offsets`/`eye_to_hand` remain available if the fixed RGB
+   camera is used for offline joint-zero calibration; that optional procedure is
+   separate from runtime board localization.
+4. `tip_pixel_from_marks`: touch a dark dot, retract along the approach axis by the
+   known stand-off, capture, and repeat at least three times per tool. The motion
+   adapter also needs measured tool-tip transforms (TCPs).
 
-### Plain checkerboard capture
+Use a flat, rigid checkerboard. The physical board's outer corners may be rounded;
+printed intersections should be sharp. A thin black border followed by a white band
+is supported; keep the complete pattern and white band visible. Difficult photos
+may need reduced-resolution detection followed by full-resolution refinement, as
+in the saved real calibration run. ChArUco stays optional; its detector-specific
+half-pixel correction isn't applied to checkerboard detections.
 
-Use a flat, rigid pattern with measured square spacing. Configure **inner corners**,
-not squares: a print with 7 by 5 squares has 6 by 4 inner corners. The physical board's
-outer corners may be rounded; the printed grid needs straight square edges and clear
-intersections. Supply your own measured counts and spacing; no physical dimensions
-are assumed here.
+Changing mounts or re-zeroing motors invalidates the affected calibration.
 
-A thin black border outside the grid followed by a white band is supported. Keep
-the surrounding white band visible and exclude both borders from the corner counts.
+## Contact, thermal and tests
 
-Capture varied positions, tilts and distances with the complete pattern visible,
-including views near the image edges. Keep resolution and focus settings consistent
-with use. Calibrate each of the three cameras separately. The five-view minimum in
-code is an input check, not evidence of sufficient coverage or accuracy.
+`TouchdownDetector` detects sustained torque steps, not electrical contact. Thermal
+helpers remain for separately calibrated callers; wrist mode doesn't invent a
+fixed-camera board pose or a depth mapping.
 
-```python
-from hardware_troubleshooter_vision.calibration import (
-    CheckerboardTarget, detect_checkerboard, calibrate_intrinsics,
-)
+Install numpy, PyYAML, pytest and `opencv-contrib-python>=4.8,<5`. Run separately:
 
-target = CheckerboardTarget(corners_x, corners_y, measured_square_m)
-detections = [detect_checkerboard(gray, target) for gray in grayscale_images]
-info, rms_px = calibrate_intrinsics([d for d in detections if d is not None])
-# Save info as camera_calibration YAML; inspect residuals and independent views.
-```
-
-For intrinsics, the detector's ordering is sufficient. For bench, joint-offset and
-hand-eye **poses**, the target must use the same physical origin and axes in every
-image. A plain checkerboard has no corner IDs. Inspect the detected point order with
-`cv2.drawChessboardCorners`; use an external origin/axis mark outside the grid to
-check it. Call `detect_checkerboard(..., reverse_order=False)` to confirm the detected
-order or `reverse_order=True` to reverse it. This is per image, not a global setting.
-If neither matches the chosen origin and axes, reject the view (square grids can have
-additional orientation ambiguity). The mark isn't automatically detected. An omitted
-`reverse_order` is allowed for intrinsics but `target_pose` refuses that detection.
-The origin is the first inner corner, +x along a row and +y along a column.
-
-Use `target_pose` with these verified detections for calibration steps 2 through 4.
-For the bench plane, include the calibration target's thickness. For PCB registration,
-the configured bench plane plus PCB thickness must describe its actual top surface;
-include fixture elevation if it sits above the bench. At the oblique camera angle,
-an incorrect height also shifts the inferred horizontal position.
-
-ChArUco remains optional through `CharucoTarget` and `detect_charuco`; its marker IDs
-provide corner identities. OpenCV's `CharucoDetector` reports corners 0.5 px down and right of where its own
-`projectPoints` puts them (measured +0.49 px, scatter 0.04 px). `detect_charuco` shifts
-them back so every pixel here uses one convention. This correction is specific to
-that detector and is not applied to checkerboard detections.
-
-## Configuration
-
-[`config/vision.example.yaml`](config/vision.example.yaml) is entirely unset, and
-`VisionService.load` lists every missing value. Each one needs a calibration or a
-measurement. The test values in `test/` describe an imaginary rig and must not be
-copied into a live config.
-
-| Section | Needed for |
-| --- | --- |
-| `board_config`, `rig_config`, `fixed_camera_info` | registration (the rig YAML's `camera_extrinsic` is the fixed camera's) |
-| `arms.<name>` | arm config, optional calibration, wrist camera_info, `base_in_rig` |
-| `pads` | wrist alignment |
-| `capture` | settled wrist frames, arm masks |
-| `occlusion` | arm masks |
-| `alignment` | wrist alignment acceptance |
-| `scene`, `contact`, `thermal` | their modules |
-
-Tool names in the arm configs should match the instrument service's turret heads
-(`scope`, `logic`, `dmm`), so `select_tool` and `align` mean the same tool.
-
-## Tests
-
-```bash
+```powershell
 python -m pytest -q vision/test
+python -m pytest -q registration/test
+python -m pytest -q arm/test
 ```
 
-Run each folder's suite on its own. The registration, arm and vision suites each
-have a `conftest`, and one pytest run over all three mixes them up. The tests render
-synthetic views: plain checkerboards, optional ChArUco targets, wrist copper and the
-registration board. They check
-the camera intrinsics, hand-eye mounts and joint offsets recovered against ground
-truth. They check alignment accuracy and convergence, ambiguity and refusals, and arm
-masks against projected mesh vertices. They also run registration end to end through
-the service into wrist alignment. Passing them says nothing about accuracy on the real
-rig.
-
-## Known limits
-
-- Stop-and-look only. The read stamp, not the exposure, is the frame's stamp. The
-  settle window is what makes that safe.
-- Alignment assumes the target is on the board's top surface and roughly planar
-  around it. Tall parts within `patch_radius_m` are rendered as flat copper or mask.
-- Custom KiCad pads use their anchor size. Back-side pads aren't read.
-- Arm masks are only as good as the URDF meshes (the vendor export lacks `part_003`)
-  and the joint map. Keep `margin_px` generous until the arms are calibrated.
-- The scene guard compares against one reference frame. Recapture it when the lighting
-  or the bench setup changes.
+Tests cover two-view recovery, actual feature matching, arm FK through homing and pad
+alignment, triangulation, ambiguity, feedback/camera guards, movement and calibration
+invalidation, plus the explicit legacy mode. Synthetic values describe an imaginary
+rig. Real PCB accuracy needs validation at the working distance.

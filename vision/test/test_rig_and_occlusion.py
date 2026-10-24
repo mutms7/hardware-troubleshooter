@@ -16,7 +16,10 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_example_config_loads_entirely_unset():
     config, problems = load_vision_config(str(ROOT / "vision/config/vision.example.yaml"))
     assert problems == []
-    assert config.missing_for_registration() == ["board_config", "rig_config", "fixed_camera_info"]
+    assert config.registration_source == "wrist"
+    assert "homing.min_lateral_baseline_m" in config.missing_for_registration()
+    assert "board_reference.image" in config.missing_for_registration()
+    assert "fixed_camera_info" not in config.missing_for_registration()
     assert config.arms == {}
     for section in (config.capture, config.occlusion, config.alignment, config.scene):
         assert section.missing()

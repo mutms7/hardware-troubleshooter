@@ -9,8 +9,10 @@ Start with [Simon's handoff](docs/SIMON_HANDOFF.md) and the
 [ARCHITECTURE.md](ARCHITECTURE.md) explains ownership and failure handling.
 [registration/](registration/README.md) holds the CV board registration library.
 [arm/](arm/README.md) builds each Maker Arm's URDF and SDK profile for the rotating toolhead.
-[vision/](vision/README.md) is the CV service: fixed-camera registration through arm
-occlusion, wrist-camera pad alignment, touchdown, scene guard, thermal, calibration.
+[vision/](vision/README.md) is the CV service: two-view wrist-camera homing,
+measured-motion triangulation, pad approach/alignment, RGB overview and calibration.
+The fixed depth-capable camera supplies RGB overview only in the default flow;
+neither its depth nor a fixed-camera PnP pose is required.
 
 ## What works here
 
@@ -20,7 +22,9 @@ occlusion, wrist-camera pad alignment, touchdown, scene guard, thermal, calibrat
 - Busy rejection, bounded cancellation, request IDs, and persistent execution uncertainty.
 - A software simulator that exercises the MCP flow without hardware.
 - Board-edge CV registration as a plain Python library, tested on synthetic frames.
-- The vision service and bench calibration, tested end to end on synthetic views.
+- Wrist-camera homing and pad alignment, tested end to end on synthetic views.
+- Intrinsics for one arm-mounted camera from 18 real checkerboard images; hand-eye,
+  tool offsets and physical accuracy limits remain rig-specific measurements.
 
 Jev, TypeSafe, RoboTwin, and Cartesia aren't active dependencies or execution paths.
 Voice can later be a separate client using these measurement tools.

@@ -1,5 +1,13 @@
 # Simon: CV integration handoff
 
+**Current localization update (2026-10-24):** runtime board pose now comes from two
+settled wrist-camera views and measured camera motion, followed by joint pose fitting
+and a triangulation consistency check. Homing is repeated for each requested pad.
+The fixed depth-capable camera is optional RGB overview; its depth and fixed-camera
+PnP aren't used. The fixed-camera registration description below is historical and
+remains only as the explicit legacy mode. See [vision/README.md](../vision/README.md)
+and its YAML for the current API, reference features and required hand-eye calibration.
+
 Repo: https://github.com/mutms7/hardware-troubleshooter/
 
 This handoff follows simoncontext3.txt where it moves the execution stages into

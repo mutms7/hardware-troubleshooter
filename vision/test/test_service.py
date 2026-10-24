@@ -53,6 +53,7 @@ def write_rig(directory: Path) -> Path:
     (directory / "rig.yaml").write_text(yaml.safe_dump(SYNTHETIC_RIG), encoding="utf-8")
     (directory / "fixed.yaml").write_text(yaml.safe_dump(SYNTHETIC_CAMERA_INFO), encoding="utf-8")
     config = {
+        "registration_source": "fixed",  # legacy path remains opt-in
         "board_config": "board.yaml",
         "rig_config": "rig.yaml",
         "fixed_camera_info": "fixed.yaml",
@@ -177,4 +178,7 @@ def test_scene_guard_through_the_service(service):
 def test_example_config_refuses():
     service, problems = VisionService.load(str(ROOT / "vision/config/vision.example.yaml"), "x")
     assert service is None
-    assert "unconfigured:board_config" in problems and "unconfigured:pads.source" in problems
+    assert (
+        "unconfigured:board_reference.board_id" in problems
+        and "unconfigured:pads.source" in problems
+    )
