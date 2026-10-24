@@ -21,6 +21,24 @@ electrical identity is inferred from images.
    `symmetry_ambiguous` and nothing is guessed.
 6. `SOLVEPNP_IPPE` runs on the same corners as a diagnostic cross-check only.
 
+### While an arm covers the board
+
+Pass the arm's image mask to `process_frame(..., occlusion_mask=mask)` (the vision
+package projects it from the arm URDF and joint states). If the mask overlaps the live
+revision's predicted outline, the frame doesn't run the full fit. Instead it samples
+the predicted outline, skips samples within the search radius of the mask, finds each
+visible edge along its normal, and Gauss-Newton refits (x, y, theta) to point-to-edge
+distances. The refit pose goes through the normal move check, so a board pushed under
+an arm still gives `board_moved`.
+
+- The search radius is twice `move_translation_m` in pixels plus 4 px, so a move just
+  above the threshold is measured, not missed. A bigger move finds no edges and leaves
+  tracking `unconfirmed`, then `tracking_lost` after the timeout.
+- It needs `min_visible_edge_fraction` of the samples, and at least two visible edges
+  20 degrees or more from parallel, so all three degrees of freedom are fixed.
+- An occluded frame never creates a revision. With no live revision, a segment touching
+  the mask fails as `board_occluded`.
+
 `reprojection_error_px` is the RMS distance from the fitted edge points to the model
 outline projected at the solved pose.
 
@@ -52,6 +70,7 @@ pose = engine.board_transform(now)  # (camera_frame, board_frame, R, t) or None
 | `snapshot(now)` | Current `Snapshot`: status, validity flags, pose, `failure_reason`, diagnostics. |
 | `drain_events()` | Snapshots queued whenever the reported state changes. |
 | `board_transform(now)` | Camera -> board pose, only while `status=valid`. |
+| `board_in_base(now)` | `rig.base_frame` -> board pose through the revision's extrinsic, only while valid. |
 | `overlay.draw_overlay(...)` | Debug drawing: outline, corners, +x arrow, feature, targets. Not verification. |
 
 Pass each image with the camera model calibrated for it. `stamp` and `now` must use
@@ -78,11 +97,13 @@ the same clock.
 - `valid_until` is the last confirmation plus the timeout, or None.
 - Board height isn't estimated. Board height for the approach belongs to the motion
   adapter's calibration.
+- `visible_edge_fraction` is set when the latest frame was an occluded confirmation.
 - `failure_reason` is `code` or `code:detail` entries joined by `; `. After an
   invalidation the first entry is `board_moved`, `tracking_lost` or
   `calibration_changed`. Other codes: `unconfigured:<key>`, `invalid:<key>`,
   `camera_info_missing`, `camera_info_invalid`, `extrinsic_unavailable`,
-  `no_camera_frames`, `no_board_segment`, `board_at_image_border`, `outline_mismatch`,
+  `no_camera_frames`, `no_board_segment`, `board_at_image_border`, `board_occluded`,
+`outline_mismatch`,
   `fit_failed`, `residual_above_limit`, `symmetry_ambiguous`, `unconfirmed`,
   `stale_observation`.
 - `status=unconfigured` while any required config value is unset.
@@ -104,6 +125,7 @@ needs a real measurement or calibration before live use:
 | `rig.thresholds.move_translation_m`, `move_rotation_rad` | `board_moved` |
 | `rig.thresholds.tracking_loss_timeout_s` | `tracking_lost`, `valid_until` |
 | `rig.thresholds.feature_min_contrast` | symmetry decision |
+| `rig.thresholds.min_visible_edge_fraction` | optional: occluded confirmation |
 | camera_info (K, D) | intrinsic calibration, as a camera_info-style YAML |
 | `rig.camera_extrinsic` | hand-eye calibration, passed to `set_extrinsic()` by the caller |
 
@@ -133,11 +155,10 @@ The tolerances are test-only and say nothing about accuracy on a real rig.
 
 ## Known limits
 
-- Fixed camera only. The rig also has a camera on the arm, and feeding its frames to
-  the engine fails closed: each arm move changes `base_frame <- camera` and invalidates
-  the revision with `calibration_changed`. Registering from the arm camera would need
-  the bench plane and the revision pose kept in the base frame, with the extrinsic
-  sampled at each image stamp. That isn't implemented.
+- Fixed camera only. Feeding a wrist camera's frames fails closed: each arm move
+  changes `base_frame <- camera` and invalidates the revision with
+  `calibration_changed`. The wrist cameras don't register the board; they do local
+  target alignment instead (see `vision/`).
 - Convex-ish outlines whose straight edges dominate. Notches shorter than the
   corner trim, round boards, and footprint-level Edge.Cuts aren't supported.
 - Contour points sit on boundary pixels, a sub-pixel inward bias. A gradient-based
