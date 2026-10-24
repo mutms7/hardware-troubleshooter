@@ -1,0 +1,14 @@
+{
+  "name": "hardware-troubleshooter",
+  "description": "Bench PCB and embedded debugging for Claude Code.",
+  "owner": {
+    "name": "PotatoPeaSea"
+  },
+  "plugins": [
+    {
+      "name": "hardware-troubleshooter",
+      "source": "./",
+      "description": "PCB and embedded debugging skills with the hardware-troubleshooter MCP server."
+    }
+  ]
+}

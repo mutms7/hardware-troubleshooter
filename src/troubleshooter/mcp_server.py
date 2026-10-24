@@ -5,12 +5,13 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.fastmcp import Context, FastMCP, Image
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .backend import BackendUnavailable, UnavailableBackend
 from .contracts import Mode
+from .design.service import DesignService
 from .instruments.service import InstrumentService, Refused
 from .service import MeasurementService
 from .settings import Settings
@@ -37,6 +38,14 @@ profile or logic type by name, and cite capture IDs. Only status=ok carries meas
 Two-line protocols (I2C, SPI) use both arms' logic probes, one line each. SPI is partial:
 SCK plus one data line, no chip select, so its bytes are tentative.
 read_digital is a declared extension point and returns not_implemented.
+
+Design tools work without the rig. ingest_design reads a KiCad board (and the schematics
+beside it) into a local store; query_design and find_probe_points answer from that store
+exactly. find_probe_points ranks exposed copper on a net and refuses pads where the tip could
+short to another net; prefer its first unrefused candidate. locate_on_image asks vision
+where pads appear in a camera; it predicts, it doesn't confirm contact. search_datasheets
+returns cited passages for reading only: never take coordinates, nets or pin numbers
+from them. After reading a pin table, record_pinout stores it with its citation.
 No model selection service or voice provider runs inside this server.
 """
 
@@ -86,6 +95,7 @@ def build_backend(settings: Settings):
 class Services:
     measurement: MeasurementService
     instruments: InstrumentService
+    design: DesignService
 
 
 def create_mcp(settings: Settings | None = None) -> FastMCP:
@@ -94,23 +104,31 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
     @asynccontextmanager
     async def lifespan(_):
         services = Services(
-            MeasurementService(settings, build_backend(settings)), InstrumentService(settings)
+            MeasurementService(settings, build_backend(settings)),
+            InstrumentService(settings),
+            DesignService(settings.design_dir, settings.moss_project_id, settings.moss_project_key),
         )
         try:
             yield services
         finally:
             await services.measurement.close()
             await services.instruments.close()
+            services.design.close()
 
     mcp = FastMCP("Hardware troubleshooter", instructions=INSTRUCTIONS, lifespan=lifespan)
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
     movement = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
+    local = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
+    online = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True)
 
     def service(ctx: Context) -> MeasurementService:
         return ctx.request_context.lifespan_context.measurement
 
     def instruments(ctx: Context) -> InstrumentService:
         return ctx.request_context.lifespan_context.instruments
+
+    def design(ctx: Context) -> DesignService:
+        return ctx.request_context.lifespan_context.design
 
     @mcp.tool(annotations=movement)
     async def measure_voltage(
@@ -294,6 +312,100 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
             "target": group_id,
             "note": "No acquisition was requested.",
         }
+
+    @mcp.tool(annotations=local)
+    async def ingest_design(path: str, ctx: Context) -> dict[str, Any]:
+        """Read a .kicad_pcb (or a KiCad project folder) and its schematics into the design
+        store and make it the active design. Re-ingest after any board edit."""
+        return await design(ctx).ingest_design(path)
+
+    @mcp.tool(annotations=readonly)
+    def list_designs(ctx: Context) -> dict[str, Any]:
+        """Ingested designs and which one is active."""
+        return design(ctx).list_designs()
+
+    @mcp.tool(annotations=local)
+    def set_active_design(design_id: str, ctx: Context) -> dict[str, Any]:
+        """Make an ingested design the active one."""
+        return design(ctx).set_active_design(design_id)
+
+    @mcp.tool(annotations=readonly)
+    def query_design(
+        ctx: Context,
+        ref: str | None = None,
+        net: str | None = None,
+        pad: str | None = None,
+        mpn: str | None = None,
+    ) -> dict[str, Any]:
+        """Exact lookup in the active design. Give one of: ref (U3: part and every pin's
+        net), net (3V3: every pad on it), pad (U3.7: its net and net-mates), mpn (parts with
+        that MPN and any recorded pinout). Net names match on their last path segment."""
+        return design(ctx).query(ref=ref, net=net, pad=pad, mpn=mpn)
+
+    @mcp.tool(annotations=readonly)
+    def find_probe_points(
+        ctx: Context,
+        net: str | None = None,
+        pad: str | None = None,
+        tip_diameter_mm: float = 0.5,
+        position_uncertainty_mm: float = 0.2,
+        limit: int = 5,
+    ) -> dict[str, Any]:
+        """Rank exposed copper on a net (or check one pad) as probe landing points: test
+        points, then passives, vias and connectors, then IC pins. A candidate is refused when
+        the tip, off by the position uncertainty, could touch another net."""
+        return design(ctx).find_probe_points(
+            net, pad, tip_diameter_mm, position_uncertainty_mm, max(1, min(limit, 50))
+        )
+
+    @mcp.tool(annotations=readonly)
+    async def locate_on_image(pad_ids: list[str], ctx: Context, camera: str = "fixed") -> list[Any]:
+        """Ask vision where pads appear in a camera image: "fixed", or an arm name for its
+        wrist camera. Returns pixel centres, outlines and a 1-sigma spread, plus an overlay
+        image when vision has a frame. A prediction from the PCB file and registration, not
+        evidence of contact."""
+        import json
+
+        if not pad_ids or len(pad_ids) > 50:
+            return [json.dumps({"status": "failed", "failure_reason": "give 1 to 50 pad_ids"})]
+        try:
+            raw = await service(ctx).backend.locate_points(list(pad_ids), camera)
+        except (BackendUnavailable, asyncio.TimeoutError):
+            raw = {"status": "failed", "mode": None, "failure_reason": "orchestrator_unavailable"}
+        png = raw.pop("overlay_png", None)
+        out: list[Any] = [json.dumps(raw)]
+        if isinstance(png, bytes | bytearray):
+            out.append(Image(data=bytes(png), format="png"))
+        return out
+
+    @mcp.tool(annotations=online)
+    async def ingest_datasheet(
+        path: str, mpn: str, ctx: Context, title: str | None = None
+    ) -> dict[str, Any]:
+        """Index a datasheet (PDF or text) for an MPN. Stored locally, and mirrored to Moss
+        when it's configured."""
+        return await design(ctx).ingest_datasheet(path, mpn, title)
+
+    @mcp.tool(annotations=online)
+    async def search_datasheets(
+        query: str, ctx: Context, mpn: str | None = None, top_k: int = 5
+    ) -> dict[str, Any]:
+        """Search datasheets and the active design's parts by meaning and keyword. Returns
+        passages with source and page to cite. Reading material only."""
+        return await design(ctx).search(query, mpn, top_k)
+
+    @mcp.tool(annotations=readonly)
+    def list_documents(ctx: Context) -> dict[str, Any]:
+        """Indexed datasheets and designs, and which search backend is active."""
+        return design(ctx).list_documents()
+
+    @mcp.tool(annotations=local)
+    def record_pinout(
+        mpn: str, pins: list[dict[str, str]], source: str, ctx: Context
+    ) -> dict[str, Any]:
+        """Store a pin table read from a datasheet: pins as [{pin, name, function, notes}],
+        source as the datasheet and page. query_design then shows it beside each pad."""
+        return design(ctx).record_pinout(mpn, pins, source)
 
     @mcp.prompt()
     def troubleshoot_hardware(request: str) -> str:

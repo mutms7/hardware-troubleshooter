@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hardware-troubleshooter"
-version = "0.2.0"
+version = "0.3.0"
 description = "MCP boundary for a hardware measurement orchestrator"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,6 +16,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.9,<1"]
+# Datasheet PDFs, and the Moss mirror of the search index (used when MOSS_PROJECT_ID and
+# MOSS_PROJECT_KEY are set). Moss is a pre-release under the PolyForm Shield licence.
+docs = ["pypdf>=5,<7", "inferedge-moss==1.0.0b19"]
 
 [project.scripts]
 hardware-troubleshooter = "troubleshooter.cli:main"

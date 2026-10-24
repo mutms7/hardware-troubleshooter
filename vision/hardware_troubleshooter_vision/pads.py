@@ -60,7 +60,20 @@ def pads_from_kicad(text: str) -> list[Pad]:
     if root is None:
         raise ValueError("not a kicad_pcb file")
     pads = []
+    default_tented = _tented(_child(_child(root, "setup") or ["setup"], "tenting"), True)
+    vias = 0
     for footprint in root[1:]:
+        if isinstance(footprint, list) and footprint and footprint[0] == "via":
+            # Untented top-side vias are copper too, named VIA<n> by file order like the
+            # MCP's design store, so either side can name a via the other understands.
+            vias += 1
+            layers = (_child(footprint, "layers") or ["layers", "F.Cu"])[1:]
+            if "F.Cu" in layers and not _tented(_child(footprint, "tenting"), default_tented):
+                at = _child(footprint, "at")
+                center = np.array([float(at[1]) / 1000.0, -float(at[2]) / 1000.0])
+                radius = float(_child(footprint, "size")[1]) / 2000.0
+                pads.append(Pad(f"VIA{vias}", center, circle_outline(center, radius)))
+            continue
         if not (
             isinstance(footprint, list) and footprint and footprint[0] in ("footprint", "module")
         ):
@@ -122,6 +135,21 @@ def pads_from_specs(specs) -> tuple[list[Pad], list[str]]:
         names.add(name)
         pads.append(Pad(name, center, outline))
     return pads, problems
+
+
+def _tented(node, default: bool) -> bool:
+    """Front-side tenting. KiCad <= 8 lists the tented sides, `(tenting front back)` or
+    `(tenting none)`; KiCad 9 writes `(tenting (front yes) (back no))`."""
+    if node is None:
+        return default
+    for item in node[1:]:
+        if item == "front":
+            return True
+        if item == "none":
+            return False
+        if isinstance(item, list) and item and item[0] == "front":
+            return len(item) < 2 or item[1] == "yes"
+    return False if len(node) > 1 else default
 
 
 def _reference(footprint: list) -> str:

@@ -14,10 +14,12 @@ ROOT = Path(__file__).parents[1]
 @asynccontextmanager
 async def connection(tmp_path, scenario="success", **settings):
     env = {key: value for key, value in os.environ.items() if not key.startswith("TH_")}
+    env = {k: v for k, v in env.items() if not k.startswith("MOSS_")}
     env.update(
         TH_BACKEND="stub",
         TH_STUB_SCENARIO=scenario,
         TH_JOURNAL=str(tmp_path / "operations.sqlite3"),
+        TH_DESIGN_DIR=str(tmp_path / "design"),
     )
     env.update({f"TH_{key.upper()}": str(value) for key, value in settings.items()})
     params = StdioServerParameters(
@@ -99,6 +101,16 @@ async def test_tool_contract_and_deduplication(tmp_path):
             "select_tool",
             "get_instrument_status",
             "list_capture_profiles",
+            "ingest_design",
+            "list_designs",
+            "set_active_design",
+            "query_design",
+            "find_probe_points",
+            "locate_on_image",
+            "ingest_datasheet",
+            "search_datasheets",
+            "list_documents",
+            "record_pinout",
         }
         assert tools["measure_voltage"].annotations.readOnlyHint is False
         assert tools["list_test_points"].annotations.readOnlyHint is True
