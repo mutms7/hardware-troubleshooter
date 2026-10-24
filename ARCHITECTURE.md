@@ -68,9 +68,11 @@ same result, and changed targets are rejected. There is no automatic reset inter
 
 ## AD3 and future voice
 
-Voltage is the first complete task contract. Scope and digital-input tools currently
-return not_implemented. Add their orchestrator contracts and an AD3 driver outside MCP.
-Use fixed digital wiring for input acquisition; no outputs are enabled by this scaffold.
+Voltage is the first complete task contract. The AD3 capture tools are the exception
+to "MCP never touches hardware": they run the WaveForms SDK in this process on the Windows
+host and turn each arm's tool turret through its arm server ([docs/AD3.md](docs/AD3.md)).
+They don't position the probe or verify contact, so their results never claim contact.
+The wavegen, power supplies, and DIO outputs stay off. read_digital is not_implemented.
 
 A future voice client can transcribe speech, call the same MCP tools, and speak the
 reply. Audio-provider dependencies don't belong in the measurement executor.

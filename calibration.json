@@ -1,0 +1,32 @@
+{
+  "joints": {
+    "shoulder_pan": {
+      "id": 1,
+      "mid_raw": 2154,
+      "min_delta": -1361,
+      "max_delta": 1190,
+      "deg_per_tick": 0.087890625
+    },
+    "shoulder_lift": {
+      "id": 2,
+      "mid_raw": 2034,
+      "min_delta": -1079,
+      "max_delta": 1233,
+      "deg_per_tick": 0.087890625
+    },
+    "elbow_flex": {
+      "id": 3,
+      "mid_raw": 1930,
+      "min_delta": -1140,
+      "max_delta": 1038,
+      "deg_per_tick": 0.087890625
+    },
+    "wrist_flex": {
+      "id": 4,
+      "mid_raw": 2031,
+      "min_delta": -1126,
+      "max_delta": 1022,
+      "deg_per_tick": 0.087890625
+    }
+  }
+}

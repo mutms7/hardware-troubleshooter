@@ -16,7 +16,18 @@ def main():
         choices=["success", "contact_failed", "board_moved", "stage_timeout"],
         default="success",
     )
+    check = sub.add_parser("ad3-check", help="Read-only AD3 check: both scope inputs and DIO 0-15")
+    check.add_argument("--serial", help="Open the AD3 whose serial contains this text")
     args = parser.parse_args()
+    if args.command == "ad3-check":
+        from .instruments.ad3 import InstrumentError, InstrumentUnavailable
+        from .instruments.check import run_check
+
+        try:
+            run_check(args.serial)
+        except (InstrumentUnavailable, InstrumentError) as exc:
+            parser.exit(1, f"AD3 check failed: {exc}\n")
+        return
     if args.command == "smoke":
         from .smoke import run_smoke
 

@@ -1,0 +1,49 @@
+{
+  "arms": {
+    "A": {"url": "http://127.0.0.1:8765", "scope": {"channel": 1}, "logic": {"dio": 0}},
+    "B": {"url": "http://127.0.0.1:8766", "scope": {"channel": 2}, "logic": {"dio": 1}}
+  },
+  "scope_profiles": {
+    "general": {
+      "description": "Free-running 8 ms window at 1 MS/s, +/-5 V. Signals up to ~100 kHz.",
+      "range_v": 10, "sample_rate_hz": 1000000, "samples": 8192,
+      "trigger_level_v": 1.5, "trigger_slope": "rising", "auto_timeout_s": 0.5
+    },
+    "fast_edges": {
+      "description": "82 us window at 100 MS/s, +/-5 V, must trigger at 1.5 V. Edges and ringing.",
+      "range_v": 10, "sample_rate_hz": 100000000, "samples": 8192,
+      "trigger_level_v": 1.5, "trigger_slope": "rising", "auto_timeout_s": 1.0,
+      "require_trigger": true
+    },
+    "slow": {
+      "description": "0.8 s window at 10 kS/s, +/-25 V. Rails, ripple, slow PWM.",
+      "range_v": 50, "sample_rate_hz": 10000, "samples": 8192
+    }
+  },
+  "logic_types": {
+    "uart_9600_8n1": {
+      "description": "UART 9600 baud 8N1 on one line (~20 bytes per capture).",
+      "protocol": "uart", "baud": 9600, "sample_rate_hz": 200000, "samples": 16384
+    },
+    "uart_115200_8n1": {
+      "description": "UART 115200 baud 8N1 on one line (~90 bytes per capture).",
+      "protocol": "uart", "baud": 115200, "sample_rate_hz": 2000000, "samples": 16384
+    },
+    "pwm": {
+      "description": "PWM frequency and duty on one line, 16 ms window. 125 Hz to ~100 kHz.",
+      "protocol": "pwm", "sample_rate_hz": 1000000, "samples": 16384
+    },
+    "i2c_100k": {
+      "description": "I2C standard mode: SCL and SDA on the two arms' logic probes.",
+      "protocol": "i2c", "sample_rate_hz": 4000000, "samples": 16384
+    },
+    "i2c_400k": {
+      "description": "I2C fast mode: SCL and SDA on the two arms' logic probes.",
+      "protocol": "i2c", "sample_rate_hz": 10000000, "samples": 16384
+    },
+    "spi_mode0": {
+      "description": "SPI mode 0, MSB first: SCK plus one data line (MOSI or MISO). Partial, no CS.",
+      "protocol": "spi", "cpol": 0, "cpha": 0, "sample_rate_hz": 20000000, "samples": 16384
+    }
+  }
+}
