@@ -1,0 +1,21 @@
+# Measured values for one arm. They override the nominal values in its arm config.
+# Any section may be left out; what isn't here stays nominal, and the generated URDF
+# lists which values are which.
+
+calibration_id: null        # changes whenever any value below changes
+arm: null                   # must equal the arm config's name
+
+joint_map: null             # kinematic calibration, same form as the arm config's
+
+wrist_camera:               # hand-eye result: link_007 -> camera optical frame
+  xyz_m: null
+  rpy_rad: null
+
+tools: {}
+#  probe:
+#    tip:                   # measured TCP: toolhead_link -> tool tip
+#      xyz_m: null
+#      rpy_rad: null
+#    tip_pixel:             # where the tip appears in the wrist camera image
+#      uv: [null, null]
+#      standoff_m: null     # tip-to-surface distance the pixel was measured at

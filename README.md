@@ -8,6 +8,7 @@ Start with [Simon's handoff](docs/SIMON_HANDOFF.md) and the
 [measurement contract](docs/MEASUREMENT_CONTRACT.md).
 [ARCHITECTURE.md](ARCHITECTURE.md) explains ownership and failure handling.
 [registration/](registration/README.md) holds the CV board registration library.
+[arm/](arm/README.md) builds each Maker Arm's URDF and SDK profile for the rotating toolhead.
 
 ## What works here
 

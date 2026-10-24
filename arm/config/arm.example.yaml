@@ -1,0 +1,54 @@
+# One Maker Arm v1 with the rotating toolhead. Every value is unset; fill each one from
+# the toolhead CAD or a measurement. Nothing is substituted with a default. Copy this
+# file once per arm (e.g. left.yaml, right.yaml).
+#
+# Poses are URDF origins: xyz_m in metres, rpy_rad as fixed-axis roll, pitch, yaw.
+# CAD values here are nominal; measured ones go in a calibration file (see
+# calibration.example.yaml), which overrides them.
+
+name: null                  # prefix for every link and joint, e.g. left -> left_link_007
+
+# Stock gripper parts on link_007 to drop, as mesh filenames in the vendored URDF,
+# e.g. meshes/part_026_solid_026.stl. [] keeps every link_007 mesh.
+remove_link_007_meshes: null
+
+flange:                     # link_007 -> toolhead mounting face
+  xyz_m: null
+  rpy_rad: null
+
+toolhead:
+  mesh: null                # path relative to this file; used for visual and collision
+  mesh_scale: null          # [0.001, 0.001, 0.001] for an STL in millimetres
+  joint_origin:             # flange -> toolhead joint frame
+    xyz_m: null
+    rpy_rad: null
+  axis: null                # rotation axis in the toolhead joint frame
+  lower_rad: null           # URDF toolhead_joint limits
+  upper_rad: null
+  select_tolerance_rad: null  # max |measured - select_rad| for a tool to count as selected
+  tools: []
+  #  - name: probe
+  #    select_rad: null     # toolhead_joint angle that puts this tool in service
+  #    tip:                 # toolhead_link -> tool tip; z should point along the approach
+  #      xyz_m: null
+  #      rpy_rad: null
+
+wrist_camera:               # link_007 -> camera optical frame (z forward, x right, y down)
+  xyz_m: null
+  rpy_rad: null
+
+# SDK joint positions (J1..J6, then motor 7) to URDF joint positions:
+# urdf = scale * sdk + offset_rad. Seven entries, all or nothing. The vendored URDF and
+# the SDK disagree on joint zeros, so these come from a kinematic calibration.
+joint_map: null
+#  - {scale: null, offset_rad: null}
+
+# Replaces the stock gripper entry for motor 7 in the SDK profile. The stock entry
+# (kp 20, kd 0.5) is soft on purpose, which lets a toolhead twist under probe load.
+sdk_joint7:
+  direction: null           # 1 or -1; motor = joint * direction + offset
+  offset: null              # rad
+  lo: null                  # SDK joint limits, rad
+  hi: null
+  kp: null                  # 0-500
+  kd: null                  # 0-5
