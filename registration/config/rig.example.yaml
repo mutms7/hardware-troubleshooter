@@ -20,6 +20,9 @@ thresholds:
   move_rotation_rad: null        # board_moved when the board rotates more than this
   tracking_loss_timeout_s: null  # tracking_lost after this long without a confirming frame
   feature_min_contrast: null     # 0-1 intensity contrast for the asymmetric feature to count
+  # Optional. Fraction (0-1] of sampled outline that must be visible for an occluded frame
+  # to confirm the registration. Unset: an arm over the board leaves tracking unconfirmed.
+  min_visible_edge_fraction: null
 
 # Fixed camera pose in base_frame (hand-eye calibration). rig_from_dict doesn't read
 # it; whatever drives RegistrationEngine passes it to set_extrinsic().

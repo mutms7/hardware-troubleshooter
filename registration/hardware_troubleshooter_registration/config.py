@@ -34,6 +34,9 @@ class Thresholds:
     move_rotation_rad: float | None = None
     tracking_loss_timeout_s: float | None = None
     feature_min_contrast: float | None = None
+    # Optional: only occluded confirmation needs it. Unset, an occluded frame never
+    # confirms the registration.
+    min_visible_edge_fraction: float | None = None
 
 
 @dataclass(frozen=True)
@@ -169,9 +172,13 @@ def rig_from_dict(data: dict) -> tuple[RigConfig, list[str]]:
         name: _positive(raw.get(name), f"rig.thresholds.{name}", problems)
         for name in THRESHOLD_NAMES
     }
-    if values["feature_min_contrast"] is not None and values["feature_min_contrast"] > 1:
-        problems.append("invalid:rig.thresholds.feature_min_contrast (must be <= 1)")
-        values["feature_min_contrast"] = None
+    values["min_visible_edge_fraction"] = _positive(
+        raw.get("min_visible_edge_fraction"), "rig.thresholds.min_visible_edge_fraction", problems
+    )
+    for name in ("feature_min_contrast", "min_visible_edge_fraction"):
+        if values[name] is not None and values[name] > 1:
+            problems.append(f"invalid:rig.thresholds.{name} (must be <= 1)")
+            values[name] = None
 
     base_frame = data.get("base_frame") or None
     return RigConfig(base_frame, normal, distance, brighter, Thresholds(**values)), problems

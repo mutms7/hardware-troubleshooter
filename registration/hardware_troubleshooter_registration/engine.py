@@ -8,6 +8,10 @@ Run it on the rig's fixed camera. The base -> camera transform must stay constan
 for a revision's lifetime; on the arm-mounted camera every arm move changes it and
 invalidates the revision with calibration_changed.
 
+While an arm covers part of the board, pass its image mask to process_frame. A live
+revision is then confirmed (or found moved) from the visible edges alone; see
+tracking.py. No revision is ever created from an occluded frame.
+
 failure_reason entries are "code" or "code:detail", joined with "; ". When the
 latest revision was invalidated, the first entry is board_moved, tracking_lost or
 calibration_changed.
@@ -22,8 +26,9 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from .geometry import PlaneFrame, wrap_angle
+from .geometry import PlaneFrame, quaternion_to_rotation, wrap_angle
 from .registration import FrameResult, board_corners_in_plane, failed, register_frame
+from .tracking import confirm_partial, mask_overlaps_board, search_radius_px
 
 BOARD_MOVED = "board_moved"
 TRACKING_LOST = "tracking_lost"
@@ -69,6 +74,7 @@ class Snapshot:
     registration_stamp: float | None = None
     ippe_tilt_deg: float | None = None
     ippe_offset_m: float | None = None
+    visible_edge_fraction: float | None = None  # set when the latest frame was occluded
 
     @property
     def failure_reason(self) -> str:
@@ -126,8 +132,13 @@ class RegistrationEngine:
 
     # --- inputs -------------------------------------------------------------------
 
-    def process_frame(self, image, stamp, camera_frame, camera, camera_problem=None):
-        """One image with the camera_info stamped for it. Returns the FrameResult."""
+    def process_frame(
+        self, image, stamp, camera_frame, camera, camera_problem=None, occlusion_mask=None
+    ):
+        """One image with the camera_info stamped for it. Returns the FrameResult.
+
+        occlusion_mask: optional uint8 image of the same size, non-zero where an arm (or
+        anything else the caller knows about) covers the view at this stamp."""
         if self.last_frame_stamp is not None and stamp <= self.last_frame_stamp:
             return None
         self.last_frame_stamp = stamp
@@ -149,7 +160,12 @@ class RegistrationEngine:
         ):
             self._invalidate(CALIBRATION_CHANGED, "camera intrinsics changed", stamp)
 
-        result = self._register(gray)
+        if occlusion_mask is not None and occlusion_mask.shape != gray.shape:
+            result = failed(
+                f"invalid:occlusion_mask size {occlusion_mask.shape[::-1]} != image {w}x{h}"
+            )
+        else:
+            result = self._register(gray, self._live(), occlusion_mask)
         self.last_result = result
         # A frame that invalidates a revision never also creates the next one.
         invalidated = live is not None and self._live() is None
@@ -276,6 +292,9 @@ class RegistrationEngine:
             registration_stamp=live.stamp if live is not None else None,
             ippe_tilt_deg=source.ippe_tilt_deg if source is not None else None,
             ippe_offset_m=source.ippe_offset_m if source is not None else None,
+            visible_edge_fraction=(
+                self.last_result.visible_fraction if self.last_result is not None else None
+            ),
         )
 
     def board_transform(self, now: float):
@@ -285,6 +304,19 @@ class RegistrationEngine:
             return None
         return snapshot.camera_frame, snapshot.board_frame, snapshot.rotation, snapshot.translation
 
+    def board_in_base(self, now: float):
+        """(base_frame, board_frame, rotation, translation) of the board in rig.base_frame,
+        through the extrinsic the revision was made with; None unless fully valid."""
+        snapshot = self.snapshot(now)
+        live = self._live()
+        if snapshot.status != "valid" or live is None or live.extrinsic is None:
+            return None
+        translation, quaternion = live.extrinsic
+        base_from_camera = quaternion_to_rotation(quaternion)
+        rotation = base_from_camera @ snapshot.rotation
+        translation = base_from_camera @ snapshot.translation + np.asarray(translation, float)
+        return self.rig.base_frame, snapshot.board_frame, rotation, translation
+
     # --- internals ----------------------------------------------------------------
 
     def _live(self) -> Registration | None:
@@ -292,7 +324,7 @@ class RegistrationEngine:
             return None
         return self.current
 
-    def _register(self, gray) -> FrameResult:
+    def _register(self, gray, live, occlusion_mask) -> FrameResult:
         if self.board is None:
             return failed("unconfigured:board")
         if self.plane is None:
@@ -301,13 +333,38 @@ class RegistrationEngine:
             return failed(self.camera_problem)
         if self.rig.board_is_brighter is None:
             return failed("unconfigured:rig.segmentation.board_is_brighter")
+        thresholds = self.rig.thresholds
+        if (
+            occlusion_mask is not None
+            and live is not None
+            and self.tracking_configured
+            and mask_overlaps_board(
+                occlusion_mask,
+                self.board,
+                self.camera,
+                self.plane,
+                live.result.pose,
+                search_radius_px(self.camera, self.plane, thresholds),
+            )
+        ):
+            return confirm_partial(
+                gray,
+                occlusion_mask,
+                self.camera,
+                self.plane,
+                self.board,
+                live.result.pose,
+                self.rig.board_is_brighter,
+                thresholds,
+            )
         return register_frame(
             gray,
             self.camera,
             self.plane,
             self.board,
             self.rig.board_is_brighter,
-            self.rig.thresholds,
+            thresholds,
+            occlusion_mask,
         )
 
     def _movement(self, old_pose, new_pose) -> str | None:

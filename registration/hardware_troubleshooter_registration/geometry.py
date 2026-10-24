@@ -48,6 +48,18 @@ def board_to_camera(points: np.ndarray, rotation: np.ndarray, translation: np.nd
     return np.column_stack([points, np.zeros(len(points))]) @ rotation.T + translation
 
 
+def quaternion_to_rotation(quaternion) -> np.ndarray:
+    """Rotation matrix of a quaternion (x, y, z, w); normalised first."""
+    x, y, z, w = np.asarray(quaternion, dtype=float) / np.linalg.norm(quaternion)
+    return np.array(
+        [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+    )
+
+
 def rotation_to_quaternion(rotation: np.ndarray) -> tuple[float, float, float, float]:
     """Quaternion (x, y, z, w) of a proper rotation matrix."""
     m = rotation

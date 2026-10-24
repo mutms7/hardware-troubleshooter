@@ -44,13 +44,18 @@ class FrameResult:
     hypotheses: list = field(default_factory=list)
     ippe_tilt_deg: float | None = None
     ippe_offset_m: float | None = None
+    visible_fraction: float | None = None  # set by an occluded (partial-edge) confirmation
 
 
 def failed(*reasons: str) -> FrameResult:
     return FrameResult(reasons=list(reasons))
 
 
-def register_frame(gray, camera, plane, board, board_is_brighter, thresholds) -> FrameResult:
+def register_frame(
+    gray, camera, plane, board, board_is_brighter, thresholds, occlusion_mask=None
+) -> FrameResult:
+    """occlusion_mask: optional uint8 image, non-zero where something known (an arm)
+    covers the view. A segment touching it is rejected rather than fitted."""
     result = FrameResult()
 
     def fail(reason):
@@ -61,6 +66,10 @@ def register_frame(gray, camera, plane, board, board_is_brighter, thresholds) ->
     if contour is None:
         return fail("no_board_segment")
     result.contour_px = contour
+    if occlusion_mask is not None:
+        touching = cv2.dilate(board_mask, np.ones((5, 5), np.uint8)) > 0
+        if (touching & (occlusion_mask > 0)).any():
+            return fail("board_occluded:a masked object covers or touches the board")
     h, w = gray.shape
     if (
         contour[:, 0].min() <= 0

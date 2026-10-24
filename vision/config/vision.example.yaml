@@ -1,0 +1,56 @@
+# Vision stack config. Every value is unset; fill each one from a calibration or a
+# measurement on the real bench. Nothing is substituted with a default. Paths are
+# relative to this file.
+
+board_config: null          # registration board YAML (registration/config/board.example.yaml)
+rig_config: null            # registration rig YAML; its camera_extrinsic is the fixed camera's
+fixed_camera_info: null     # camera_calibration YAML for the fixed camera
+
+arms: {}
+#  left:
+#    arm_config: null        # arm description YAML (arm/config/arm.example.yaml)
+#    calibration: null       # optional arm calibration YAML; without it values are nominal
+#    wrist_camera_info: null # camera_calibration YAML for this arm's wrist camera
+#    base_in_rig:            # base_link pose in the rig base frame (the URDF base is Y-up)
+#      xyz_m: null
+#      rpy_rad: null
+
+pads:                       # pad geometry for wrist alignment, never from images
+  source: null              # kicad or measured
+  kicad_pcb: null           # front-copper pads are read from it
+  measured: []
+  #  - {name: TP1, shape: rect, center_m: [x, y], size_m: [w, h], angle_rad: 0}
+  #  - {name: TP2, shape: circle, center_m: [x, y], radius_m: r}
+
+capture:
+  max_joint_skew_s: null      # joint sample must be this close to the image stamp
+  settle_velocity_rad_s: null # every joint slower than this ...
+  settle_duration_s: null     # ... for this long before a wrist frame counts
+
+occlusion:
+  margin_px: null           # grows each projected arm part, for calibration error
+
+alignment:
+  pads_are_brighter: null   # true if copper is brighter than the solder mask
+  patch_radius_m: null      # board area around the target used for matching
+  resolution_m: null        # board-plane size of one rectified pixel
+  search_radius_m: null     # largest predicted-vs-seen offset searched
+  min_match_score: null     # 0-1 normalised correlation of the best match
+  min_uniqueness_margin: null # 0-1, best minus the best match elsewhere
+  max_standoff_error_m: null # hover height must match the tip pixel's stand-off
+  converged_m: null         # tip-to-target error that counts as aligned
+
+scene:
+  diff_threshold: null      # grey-level change from the empty-rig reference
+  min_blob_area_px: null    # smallest changed area reported as an obstruction
+  board_margin_px: null     # band around the board left to registration
+
+contact:
+  joints: null              # SDK joints whose torque is watched, e.g. [2, 3, 5]
+  torque_step_nm: null      # change from the pre-descent baseline that counts as touch
+  persistence_s: null       # the change must hold this long
+  baseline_s: null          # window before descent averaged as the baseline
+
+thermal:
+  homography: null          # 3x3, thermal cell (col, row) -> fixed camera ideal pixel
+  min_delta_c: null         # hot spot must be this far above the board median

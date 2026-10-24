@@ -9,7 +9,7 @@ flowchart TD
     H[Codex desktop model] -->|registered electrical target| M[MCP boundary]
     M -->|measure_voltage task| O[Measurement orchestrator]
     O --> R[Target registry]
-    O --> C[Simon's CV registration]
+    O --> C[Simon's vision stack]
     O --> A[Motion and positioning adapter]
     O --> V[Contact verifier]
     O --> I[AD3 instrument adapter]
@@ -27,9 +27,15 @@ holds the probe during acquisition, serializes the whole bench, and owns stage
 deadlines and physical stopping. It must also reject concurrent goals from other
 clients. The MCP busy guard alone doesn't enforce bench-wide exclusivity.
 
-Simon owns CV/registration implementation, in [registration/](registration/README.md).
-It uses board-edge fitting; there's no AprilTag dependency.
-A valid camera overlay doesn't establish robot accuracy or electrical contact.
+Simon owns CV. [registration/](registration/README.md) fits the board's edges in the
+fixed camera, with no AprilTag dependency, and keeps confirming it from the visible
+edges while an arm covers part of it. [vision/](vision/README.md) wraps that in one
+service for the orchestrator. It masks both arms from their URDF and joint state,
+aligns each tool over its target pad with the wrist cameras, detects touchdown from
+joint torque, guards the workspace, and holds the bench calibration.
+[arm/](arm/README.md) describes the Maker Arms with the rotating toolhead.
+The orchestrator still owns motion and IK; vision only measures and corrects.
+A valid camera overlay or alignment doesn't establish electrical contact.
 
 Only the explicit stub backend runs a scripted simulated sequence inside this
 Python process. That sequence tests the boundary; it isn't the production stage machine.
