@@ -126,7 +126,8 @@ BOARD_OUTLINE = np.array([[0.0, 0.0], [0.1, 0.0], [0.1, 0.06], [0.0, 0.06]])
 
 
 def thermal_scene(camera):
-    """Fixed camera 0.4 m above the board; thermal cell (c, r) sees board (0.012c+0.008, 0.052-0.007r)."""
+    """Fixed camera 0.4 m above the board. Thermal cell (c, r) sees the board point
+    (0.008 + 0.012 c, 0.052 - 0.007 r)."""
     board_from_camera = transforms.transform(np.diag([1.0, -1.0, -1.0]), [0.05, 0.03, 0.4])
     camera_from_board = transforms.invert(board_from_camera)
 

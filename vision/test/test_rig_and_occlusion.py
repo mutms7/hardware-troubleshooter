@@ -144,11 +144,22 @@ def test_arm_behind_the_camera_is_not_masked(arm, camera):
 
 def test_straddling_part_masks_everything(arm, camera):
     poses = arm.link_poses(ARM_POSE)
-    tool = arm.base_from_tool(poses, "probe")[:3, 3]
-    rig_tool = transforms.apply(arm.rig_from_base, tool)[0]
-    # Put the camera's optical centre right at the tool tip.
-    mask, *_ = masks(arm, camera, overhead_camera(height=rig_tool[2], x=rig_tool[0]))
+    part = max(arm.geometry.parts, key=lambda p: len(p.vertices))
+    inside = transforms.apply(arm.rig_from_base @ poses[part.link], part.vertices).mean(axis=0)
+    # Put the camera's optical centre inside a mesh part.
+    mask, *_ = masks(
+        arm,
+        camera,
+        overhead_camera(height=inside[2], x=inside[0])
+        @ transforms.transform(np.eye(3), [0, -inside[1], 0]),
+    )
     assert mask.all()
+
+
+def test_part_outside_the_view_is_skipped(arm, camera):
+    # Camera level with the arm, far to one side and looking away: nothing is visible.
+    mask, *_ = masks(arm, camera, overhead_camera(height=0.3, x=3.0))
+    assert not mask.any()
 
 
 def test_missing_link_pose_raises(arm, camera):

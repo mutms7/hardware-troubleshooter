@@ -2,8 +2,9 @@
 
 Each mesh part is projected through the camera and filled as its convex hull, then the
 mask is grown by a margin. A hull is larger than the part's silhouette, so the mask errs
-toward hiding more of the board, never less. A part that straddles the camera plane
-can't be projected reliably and masks the whole image.
+toward hiding more of the board, never less. A part wholly outside one side of the
+view frustum can't be seen and is skipped; one that straddles the camera plane inside
+the frustum can't be projected reliably and masks the whole image.
 """
 
 from __future__ import annotations
@@ -105,11 +106,14 @@ def arm_mask(
     """
     h, w = shape or (camera.height, camera.width)
     mask = np.zeros((h, w), np.uint8)
+    frustum = _frustum_normals(camera)
     for part in geometry.parts:
         pose = link_poses.get(part.link)
         if pose is None:
             raise ValueError(f"no pose for link {part.link!r}")
         points = transforms.apply(camera_from_base @ pose, part.vertices)
+        if any((points @ normal < 0).all() for normal in frustum):
+            continue  # wholly outside the view
         in_front = points[:, 2] > _NEAR_M
         if not in_front.any():
             continue  # wholly behind the camera
@@ -121,6 +125,24 @@ def arm_mask(
         size = 2 * math.ceil(margin_px) + 1
         mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size)))
     return mask
+
+
+def _frustum_normals(camera) -> list[np.ndarray]:
+    """Inward normals of the four side planes through the camera centre, around the
+    image grown by a tenth on each side."""
+    w, h = camera.width, camera.height
+    grow_x, grow_y = 0.1 * w, 0.1 * h
+    corners = np.array(
+        [[-grow_x, -grow_y], [w + grow_x, -grow_y], [w + grow_x, h + grow_y], [-grow_x, h + grow_y]]
+    )
+    rays = camera.ideal_to_rays(camera.undistort_px(corners))
+    normals = []
+    for a, b in zip(rays, np.roll(rays, -1, axis=0)):
+        normal = np.cross(a, b)
+        if normal @ np.array([0.0, 0.0, 1.0]) < 0:  # the optical axis is inside
+            normal = -normal
+        normals.append(normal)
+    return normals
 
 
 def _fill_hull(mask: np.ndarray, camera, points: np.ndarray) -> None:
