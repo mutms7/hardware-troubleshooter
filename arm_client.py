@@ -25,8 +25,11 @@ class Arm:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.load(r)
 
-    def state(self):
-        with urllib.request.urlopen(f"{self.url}/api/state", timeout=10) as r:
+    def state(self, measure=False):
+        """measure=True also reads the joint encoders (real arm, armed only) and adds
+        follow_err_mm: how far the real tip lags the commanded one. A growing gap while the
+        command keeps moving down means the probe is blocked, i.e. touching something."""
+        with urllib.request.urlopen(f"{self.url}/api/state" + ("?measure=1" if measure else ""), timeout=10) as r:
             return json.load(r)
 
     def jog(self, right=0.0, up=0.0, in_=0.0, height_mm=None):
