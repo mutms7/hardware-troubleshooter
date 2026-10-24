@@ -5,7 +5,7 @@ from .contracts import Measurement
 
 
 class Journal:
-    """Record dispatch before ROS; unresolved operations survive process restarts."""
+    """Record dispatch before the orchestrator; unresolved operations survive process restarts."""
 
     def __init__(self, path: str):
         if path != ":memory:":

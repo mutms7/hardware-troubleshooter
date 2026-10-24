@@ -50,8 +50,7 @@ The MAC is also the `id=` field in the `info` reply.
 The S3 could enumerate as a UVC webcam. However, UVC carries 8-bit images, so
 the absolute temperatures would be lost. Hosts also expect far more than 8x8
 pixels. The current stream carries the full 0.25 C sensor data, with a sequence
-number and a device timestamp. A ROS node can wrap `ThermalCamera` and publish
-`sensor_msgs/Image` with encoding `32FC1`.
+number and a device timestamp.
 
 ## Protocol
 

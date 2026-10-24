@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "hardware-troubleshooter"
 version = "0.2.0"
-description = "MCP boundary for a ROS 2 hardware measurement orchestrator"
+description = "MCP boundary for a hardware measurement orchestrator"
 requires-python = ">=3.10"
 dependencies = [
   "anyio>=4.5,<5",
@@ -19,7 +19,6 @@ dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.9,<1"]
 
 [project.scripts]
 hardware-troubleshooter = "troubleshooter.cli:main"
-hardware-ros-stub = "troubleshooter.ros_stub:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/troubleshooter"]

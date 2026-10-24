@@ -1,4 +1,4 @@
-# MCP and ROS ownership
+# MCP and orchestrator ownership
 
 The desktop host supplies the reasoning model. It chooses an electrical target,
 asks for a complete measurement, and explains the evidence. The MCP process doesn't
@@ -7,9 +7,9 @@ call another model.
 ```mermaid
 flowchart TD
     H[Codex desktop model] -->|registered electrical target| M[MCP boundary]
-    M -->|MeasureVoltage action| O[ROS measurement orchestrator]
+    M -->|measure_voltage task| O[Measurement orchestrator]
     O --> R[Target registry]
-    O --> C[Simon's CV registration nodes]
+    O --> C[Simon's CV registration]
     O --> A[Motion and positioning adapter]
     O --> V[Contact verifier]
     O --> I[AD3 instrument adapter]
@@ -19,7 +19,7 @@ flowchart TD
 
 MCP validates input, dispatches goals, forwards stage feedback, handles outer timeout
 and cancellation, checks the final evidence, and records request IDs. It never
-looks up coordinates, queries TF, runs IK, chooses recovery movements, or reads AD3.
+looks up coordinates, transforms frames, runs IK, chooses recovery movements, or reads AD3.
 
 The orchestrator owns precheck -> resolve -> plan -> approach -> position check ->
 contact check -> acquire -> retract. It validates registration throughout the action,
@@ -27,8 +27,8 @@ holds the probe during acquisition, serializes the whole bench, and owns stage
 deadlines and physical stopping. It must also reject concurrent goals from other
 clients. The MCP busy guard alone doesn't enforce bench-wide exclusivity.
 
-Simon owns CV/registration implementation. This repository supplies its interface
-source only. Board-edge fitting is his proposed method; there's no AprilTag dependency.
+Simon owns CV/registration implementation, in [registration/](registration/README.md).
+It uses board-edge fitting; there's no AprilTag dependency.
 A valid camera overlay doesn't establish robot accuracy or electrical contact.
 
 Only the explicit stub backend runs a scripted simulated sequence inside this
@@ -40,12 +40,11 @@ Successful voltage results require finite volts, matching request/target identit
 verified contact, completed movement, correct positioning, unchanged board,
 valid calibration/registration, confirmed retraction, and confirmed stopping.
 
-The shared action adds request ID echo, calibration validity, registration ID,
-retraction status, and final stop confirmation to Simon's draft. These additions
-make checks independent and cancellation outcomes explicit. Both ROS sides must
-build the same interface package.
+The result carries request ID echo, calibration validity, registration ID,
+retraction status, and final stop confirmation. These make checks independent and
+cancellation outcomes explicit.
 
-Non-success ROS readings are NaN; MCP outputs null. Infinity, a numeric reading on
+Non-success orchestrator readings are NaN; MCP outputs null. Infinity, a numeric reading on
 a failed result, missing mode, contradictory stage checks, or an action-state/result
 mismatch produce a protocol violation. Valid 0 V with verified checks remains 0 V.
 
@@ -54,11 +53,11 @@ Only the orchestrator can assert live or simulated mode.
 
 ## Cancellation and uncertainty
 
-rclpy spins in a background MultiThreadedExecutor. Its futures are bridged to the
-MCP asyncio loop with thread-safe callbacks. No blocking spin runs in an MCP handler.
-Goal acceptance is asynchronous; a cancel intent is retained for a goal accepted late.
+A backend's `start()` must not block an MCP handler. It returns a handle whose result
+and cancel are awaited on the MCP asyncio loop. If goal acceptance is asynchronous,
+the handle must retain a cancel intent for a goal accepted late.
 
-The ROS orchestrator handles actual stop and any safe retraction. A cancellation
+The orchestrator handles actual stop and any safe retraction. A cancellation
 acknowledgement alone isn't a stop confirmation. If a final trustworthy result
 can't be obtained within the configured grace, MCP records execution uncertainty
 and blocks new measurements. Timeouts never retry or home an arm.
@@ -70,7 +69,7 @@ same result, and changed targets are rejected. There is no automatic reset inter
 ## AD3 and future voice
 
 Voltage is the first complete task contract. Scope and digital-input tools currently
-return not_implemented. Add their ROS interfaces and an AD3 driver outside MCP.
+return not_implemented. Add their orchestrator contracts and an AD3 driver outside MCP.
 Use fixed digital wiring for input acquisition; no outputs are enabled by this scaffold.
 
 A future voice client can transcribe speech, call the same MCP tools, and speak the

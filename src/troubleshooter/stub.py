@@ -1,4 +1,4 @@
-"""Explicit software simulation. No ROS, cameras, arms, or AD3 are accessed."""
+"""Explicit software simulation. No cameras, arms, or AD3 are accessed."""
 
 import asyncio
 import math
@@ -38,7 +38,7 @@ class StubState:
 
 
 def stub_result(scenario: str, target: str, request_id: str, state: StubState) -> dict:
-    """Shared scripted result for the in-process simulator and ROS action stub."""
+    """Scripted result for the in-process simulator."""
     raw = {
         "request_id": request_id,
         "status": "ok",

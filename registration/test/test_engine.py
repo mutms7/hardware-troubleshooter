@@ -74,7 +74,7 @@ def test_static_board_gives_valid_registration(scene, registered):
     assert snapshot.calibration_revision
     assert snapshot.symmetry_resolved and snapshot.edge_points > 0
     assert engine.drain_events() == []  # confirmations alone aren't state changes
-    parent, child, rotation, translation = engine.tf_to_publish(1.3)
+    parent, child, rotation, translation = engine.board_transform(1.3)
     assert (parent, child) == (CAMERA_FRAME, "synthetic_board")
     assert np.allclose(rotation, snapshot.rotation)
     assert np.allclose(translation, snapshot.translation)
@@ -98,7 +98,7 @@ def test_pose_jump_publishes_board_moved_and_never_revalidates(scene, registered
     assert event.reasons[0].startswith("board_moved:")
     assert event.status == "invalid"
     assert not event.tracking_valid and not event.board_unmoved and not event.has_pose
-    assert engine.tf_to_publish(1.1) is None
+    assert engine.board_transform(1.1) is None
 
     # Back at the original pose, r1 still isn't valid; a fresh revision is made instead.
     feed(engine, scene, pose, 1.2)
@@ -117,7 +117,7 @@ def test_brief_occlusion_suspends_without_invalidating(scene, registered):
     assert not snapshot.tracking_valid
     assert snapshot.has_pose
     assert any(r.startswith("unconfirmed") for r in snapshot.reasons)
-    assert engine.tf_to_publish(1.1) is None
+    assert engine.board_transform(1.1) is None
     feed(engine, scene, pose, 1.2)
     assert engine.snapshot(1.2).status == "valid"
     assert engine.snapshot(1.2).registration_id.endswith("/r1")
@@ -156,10 +156,10 @@ def test_dropped_frames_publish_tracking_lost(scene, registered):
     engine.tick(1.0 + TIMEOUT + 0.01)
     events = engine.drain_events()
     assert len(events) == 1 and events[0].reasons[0].startswith("tracking_lost")
-    assert engine.tf_to_publish(2.0) is None
+    assert engine.board_transform(2.0) is None
 
 
-def test_missing_extrinsic_is_calibration_invalid_without_tf(scene):
+def test_missing_extrinsic_is_calibration_invalid_without_transform(scene):
     engine = make_engine(scene, extrinsic=None)
     pose = scene.centred_pose()
     assert feed(engine, scene, pose, 1.0).ok
@@ -169,10 +169,10 @@ def test_missing_extrinsic_is_calibration_invalid_without_tf(scene):
     assert snapshot.status == "invalid"
     assert "extrinsic_unavailable:test" in snapshot.reasons
     assert snapshot.calibration_revision == ""
-    assert engine.tf_to_publish(1.0) is None
+    assert engine.board_transform(1.0) is None
 
 
-def test_unset_base_frame_is_unconfigured_without_tf():
+def test_unset_base_frame_is_unconfigured_without_transform():
     rig = copy.deepcopy(SYNTHETIC_RIG)
     rig["base_frame"] = None
     scene = Scene(rig_dict=rig)
@@ -182,7 +182,7 @@ def test_unset_base_frame_is_unconfigured_without_tf():
     assert snapshot.status == "unconfigured"
     assert not snapshot.calibration_valid
     assert "unconfigured:rig.base_frame" in snapshot.reasons
-    assert engine.tf_to_publish(1.0) is None
+    assert engine.board_transform(1.0) is None
 
 
 def test_unset_bench_plane_fails_closed():
@@ -199,7 +199,7 @@ def test_unset_bench_plane_fails_closed():
     assert snapshot.status == "unconfigured"
     assert not snapshot.calibration_valid and not snapshot.tracking_valid
     assert not snapshot.has_pose
-    assert engine.tf_to_publish(1.0) is None
+    assert engine.board_transform(1.0) is None
 
 
 def test_invalid_camera_info_is_calibration_invalid(scene):
@@ -211,7 +211,7 @@ def test_invalid_camera_info_is_calibration_invalid(scene):
     snapshot = engine.snapshot(1.0)
     assert not snapshot.calibration_valid and not snapshot.tracking_valid
     assert any(r.startswith("camera_info_invalid") for r in snapshot.reasons)
-    assert engine.tf_to_publish(1.0) is None
+    assert engine.board_transform(1.0) is None
 
 
 def test_mismatched_camera_info_size_is_rejected(scene):
@@ -238,7 +238,7 @@ def test_moving_camera_never_stays_valid(scene, registered):
         stamp = 1.0 + 0.2 * i
         engine.set_extrinsic((EXTRINSIC[0] + 0.01 * i, EXTRINSIC[1]), None, stamp)
         assert engine.snapshot(stamp).status != "valid"
-        assert engine.tf_to_publish(stamp) is None
+        assert engine.board_transform(stamp) is None
         feed(engine, scene, pose, stamp + 0.1)  # re-registers under the new extrinsic
     changed = [
         e

@@ -1,4 +1,4 @@
-# Per-board registration config. Every value is unset; the node reports
+# Per-board registration config. Every value is unset; the engine reports
 # status=unconfigured until each one is filled from the PCB file or a measurement.
 #
 # Board frame: metres, z out of the top face. For outline_source: kicad, it is the
@@ -6,7 +6,7 @@
 # feature and target positions below must use that same frame.
 
 board_id: null          # must match the registry's board identity
-frame_id: null          # TF child frame; defaults to board_<board_id>
+frame_id: null          # board frame name; defaults to board_<board_id>
 thickness_m: null       # measured PCB thickness; the outline is fitted on the top surface
 
 outline_source: null    # "kicad" or "measured"

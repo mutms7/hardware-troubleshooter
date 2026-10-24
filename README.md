@@ -1,12 +1,13 @@
 # Hardware troubleshooter MCP scaffold
 
 Codex requests a measurement by registered pad, pin, or net identity. This Python
-MCP server sends one ROS 2 action goal and returns validated evidence. It never
-accesses a camera, TF, robot, or instrument directly.
+MCP server dispatches one task to a measurement orchestrator and returns validated
+evidence. It never accesses a camera, robot, or instrument directly.
 
 Start with [Simon's handoff](docs/SIMON_HANDOFF.md) and the
-[shared ROS contract](docs/ROS_CONTRACT.md).
+[measurement contract](docs/MEASUREMENT_CONTRACT.md).
 [ARCHITECTURE.md](ARCHITECTURE.md) explains ownership and failure handling.
+[registration/](registration/README.md) holds the CV board registration library.
 
 ## What works here
 
@@ -14,16 +15,15 @@ Start with [Simon's handoff](docs/SIMON_HANDOFF.md) and the
 - Voltage task dispatch through an explicit backend interface.
 - Boundary checks separating motion, positioning, contact, calibration, and retraction.
 - Busy rejection, bounded cancellation, request IDs, and persistent execution uncertainty.
-- A software simulator that exercises the MCP flow without ROS.
-- Optional rclpy action/service client and a separate ROS action/service stub.
-- Shared ROS action, service, and registration message source files for teammates.
+- A software simulator that exercises the MCP flow without hardware.
+- Board-edge CV registration as a plain Python library, tested on synthetic frames.
 
 Jev, TypeSafe, RoboTwin, and Cartesia aren't active dependencies or execution paths.
 Voice can later be a separate client using these measurement tools.
 
-There is no real camera implementation, arm controller, contact verifier, or AD3
-driver here. The ROS client/stub source hasn't been run on this Windows environment
-because ROS isn't installed. Passing tests here doesn't prove a physical measurement.
+There is no hardware backend, orchestrator, arm controller, contact verifier, or AD3
+driver here. The default backend (`none`) reports `orchestrator_unavailable` for every
+measurement. Passing tests here doesn't prove a physical measurement.
 
 ## Run the software simulator
 
@@ -38,7 +38,7 @@ uv run hardware-troubleshooter smoke
 
 It starts an actual MCP server, performs the handshake, lists targets, measures
 the synthetic point, prints the result, and exits. Expect status=ok, reading=3.29,
-units=V, mode=simulated. No ROS or hardware is accessed. Each smoke run uses a
+units=V, mode=simulated. No hardware is accessed. Each smoke run uses a
 fresh, temporary simulated rig and journal.
 
 Test a failed contact:
@@ -87,16 +87,16 @@ simulation returns 3.29 V with `mode=simulated`. It demonstrates the interface o
 | Tool | Current behavior |
 | --- | --- |
 | `measure_voltage(target, request_id?)` | Sends one task and waits for the validated final result. |
-| `list_test_points()` | Reads the ROS registry or explicit stub registry. |
-| `get_rig_status()` | Reads ROS state and reports the MCP busy/uncertainty latch. |
+| `list_test_points()` | Reads the orchestrator registry or explicit stub registry. |
+| `get_rig_status()` | Reads orchestrator state and reports the MCP busy/uncertainty latch. |
 | `abort()` | Requests cancel and waits briefly for final stop/retraction checks. |
 | `get_operation(request_id)` | Reads progress state or a saved result without repeating motion. |
 | `capture_waveform(target, profile_id)` | Explicit `not_implemented` extension point. |
 | `read_digital(group_id)` | Explicit `not_implemented` extension point. |
 | `capture_logic(group_id, profile_id)` | Explicit `not_implemented` extension point. |
 
-The AD3 extension tools never fabricate captures. Their future implementations use
-ROS measurement interfaces; hardware access stays outside MCP. Digital input groups
+The AD3 extension tools never fabricate captures. Their future implementations go
+through the orchestrator; hardware access stays outside MCP. Digital input groups
 will use fixed, configured wiring to minimize arm movement.
 
 Each measurement returns status, nullable reading, units, requested/resolved target,
@@ -105,51 +105,11 @@ Only `status=ok` can carry a usable reading. An unverified contact isn't a zero 
 An invalid result becomes `inconclusive: protocol_violation`.
 
 Mode comes from the orchestrator's result. It is null for a boundary failure before
-any trustworthy result arrives. Missing ROS never activates the simulator.
+any trustworthy result arrives. A missing backend never activates the simulator.
 
 Optional `request_id` makes an exact retry return the saved result. Reusing it for a
 different target is rejected. Without it, each call is a new request, so the host
 mustn't silently retry an interrupted movement.
-
-## Connect ROS on the bench computer
-
-Use the ROS distribution and Python version supported by your teammates' setup.
-The Windows simulator's Python installation isn't proof of rclpy compatibility.
-No ROS installation or distribution was chosen here.
-
-On the ROS machine, source its environment, then build the shared interfaces:
-
-```bash
-cd ros2_ws
-colcon build --packages-select hardware_troubleshooter_interfaces
-source install/setup.bash
-cd ..
-python3 -m venv --system-site-packages .venv-ros
-.venv-ros/bin/python -m pip install -e .
-```
-
-Use the system Python belonging to that ROS installation. The environment needs
-both rclpy and the generated interface package visible. Don't pip-install rclpy.
-
-Start the synthetic ROS action server in one sourced terminal:
-
-```bash
-.venv-ros/bin/hardware-ros-stub --scenario success
-```
-
-In another sourced terminal, start MCP with `TH_BACKEND=ros`. Set
-`TH_OUTER_TIMEOUT_S` longer than the orchestrator's agreed overall timeout, and
-`TH_CANCEL_GRACE_S` to the agreed stop-confirmation window. Both default to unset
-for ROS mode, so no goal is dispatched until configured. For the stub only,
-the sample ROS integration test uses software test limits.
-
-Default endpoints: action `/measure`, services `/registry/list` and `/rig/status`.
-See `.env.example` for variable names (the file isn't loaded automatically).
-
-For Codex on Windows and ROS inside WSL, launch MCP inside that sourced WSL
-environment through a wrapper. [scripts/run_ros_mcp.sh](scripts/run_ros_mcp.sh)
-is an example; set its required paths and timeout environment first.
-Don't connect the Windows simulator environment to ROS by guessing Python paths.
 
 ## Verify
 
@@ -162,12 +122,8 @@ uv run ruff format --check .
 Tests start a real MCP subprocess and exercise success, failed contact, unknown
 target, moved board, stale calibration, malformed results, timeout, explicit abort,
 MCP request cancellation, busy rejection, replay protection, and persistence after
-uncertain execution. ROS future tests cover thread delivery and late goal acceptance.
-
-Optional ROS smoke tests in `tests/test_ros_integration.py` run only when rclpy and
-the generated interfaces are available. They launch the synthetic ROS server on
-unique test endpoints and exercise MCP -> rclpy -> ROS stub. They never use the
-production action name.
+uncertain execution. The registration library has its own suite, which needs numpy,
+OpenCV and PyYAML: `python -m pytest -q registration/test`.
 
 Unknown execution is latched in `data/mcp_operations.sqlite3`. No MCP reset tool
 can dismiss it. The real orchestrator/operator recovery procedure remains a required
@@ -177,9 +133,9 @@ restart mustn't be used as a motion reset.
 ## Next integration work
 
 Simon supplies CV registration, board movement invalidation, and measured calibration
-quality. This workspace owns the non-CV software: ROS orchestration, arm/contact
-adapters, and AD3 acquisition integration remain to be implemented against their
-hardware APIs. The registry needs the actual circuit's points, reference wiring,
+quality. This workspace owns the non-CV software: the measurement orchestrator, the
+backend that connects MCP to it, arm/contact adapters, and AD3 acquisition remain to be
+implemented against their hardware APIs. The registry needs the actual circuit's points, reference wiring,
 and allowed operating conditions. Those values remain unset.
 
-Share the [Simon handoff](docs/SIMON_HANDOFF.md) when coordinating the CV/ROS work.
+Share the [Simon handoff](docs/SIMON_HANDOFF.md) when coordinating the CV work.

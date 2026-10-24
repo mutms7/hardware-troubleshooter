@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import cv2
 import numpy as np
 
-# Coefficient counts written by the ROS camera_calibration tools for each model.
+# Coefficient count for each supported camera_info distortion model.
 _DISTORTION_SIZES = {"plumb_bob": (5,), "rational_polynomial": (8,), "equidistant": (4,)}
 _UNDISTORT_CRITERIA = (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 100, 1e-10)
 
