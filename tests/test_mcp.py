@@ -96,6 +96,9 @@ async def test_tool_contract_and_deduplication(tmp_path):
             "capture_waveform",
             "read_digital",
             "capture_logic",
+            "select_tool",
+            "get_instrument_status",
+            "list_capture_profiles",
         }
         assert tools["measure_voltage"].annotations.readOnlyHint is False
         assert tools["list_test_points"].annotations.readOnlyHint is True
@@ -114,14 +117,13 @@ async def test_tool_contract_and_deduplication(tmp_path):
             assert invalid["failure_reason"] == "invalid_target"
         unknown = await call(client, "measure_voltage", target="UNREGISTERED")
         assert unknown["failure_reason"] == "unknown_target"
-        for tool, args in [
-            ("capture_waveform", {"target": "TP_DEMO", "profile_id": "scope"}),
-            ("read_digital", {"group_id": "inputs"}),
-            ("capture_logic", {"group_id": "inputs", "profile_id": "logic"}),
-        ]:
-            extension = await call(client, tool, **args)
-            assert extension["failure_reason"] == "not_implemented"
-            assert extension["reading"] is None
+        extension = await call(client, "read_digital", group_id="inputs")
+        assert extension["failure_reason"] == "not_implemented"
+        assert extension["reading"] is None
+        # No rig file configured: the AD3 tools refuse rather than guess the wiring.
+        unset = await call(client, "capture_waveform", arm="A", profile_id="general")
+        assert unset["failure_reason"] == "configuration_required:rig"
+        assert unset["mode"] is None
         prompt = await client.get_prompt("troubleshoot_hardware", {"request": "No output"})
         assert "registered" in prompt.messages[0].content.text
 
@@ -208,3 +210,36 @@ async def test_mcp_request_cancellation_reaches_backend(tmp_path):
         assert result["failure_reason"] == "aborted"
         assert result["checks"]["stop_confirmed"]
         assert result["reading"] is None
+
+
+async def test_instrument_tools_through_actual_mcp(tmp_path):
+    async with connection(
+        tmp_path,
+        instruments="fake",
+        rig_config=ROOT / "config" / "rig.example.json",
+        captures_dir=tmp_path / "captures",
+    ) as client:
+        status = await call(client, "get_instrument_status")
+        assert status["mode"] == "simulated"
+        assert status["instrument"]["connected"]
+        assert set(status["arms"]) == {"A", "B"}
+        profiles = await call(client, "list_capture_profiles")
+        assert profiles["logic_types"]["spi_mode0"]["roles"] == ["sck", "data"]
+        selected = await call(client, "select_tool", arm="B", head="dmm")
+        assert selected["status"] == "ok"
+        wave = await call(client, "capture_waveform", arm="A", profile_id="general")
+        assert wave["status"] == "ok"
+        assert wave["contact_verified"] is False
+        assert wave["placement"] == "unmanaged"
+        assert Path(wave["capture_file"]).is_file()
+        bus = await call(
+            client, "capture_logic", logic_type="i2c_100k", lines={"scl": "A", "sda": "B"}
+        )
+        assert bus["measurements"]["decoded"]["transactions"][0]["address"] == "0x48"
+        after = await call(client, "get_instrument_status")
+        assert {name: arm["tool"] for name, arm in after["arms"].items()} == {
+            "A": "logic",
+            "B": "logic",
+        }
+        bad = await call(client, "select_tool", arm="Z", head="scope")
+        assert bad["failure_reason"] == "unknown_arm"

@@ -2,14 +2,16 @@ import asyncio
 import logging
 import math
 from contextlib import asynccontextmanager
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .backend import BackendUnavailable, UnavailableBackend
-from .contracts import TARGET_PATTERN, Mode
+from .contracts import Mode
+from .instruments.service import InstrumentService, Refused
 from .service import MeasurementService
 from .settings import Settings
 
@@ -24,8 +26,18 @@ isn't evidence of zero volts or of a component fault. Cite request IDs and prese
 Simulated readings demonstrate software only. Missing hardware or registration must
 never trigger a fallback to simulated evidence. Stop on uncertain motion, timeout,
 abort, protocol_violation, or failed calibration. Never silently retry a movement.
-Waveform and digital tools are declared extension points and currently return
-not_implemented. No model selection service or voice provider runs inside this server.
+
+AD3 tools: each robot arm has a turret with a scope probe, a logic probe, and a multimeter
+probe (the multimeter is a separate device these tools don't drive). capture_waveform and
+capture_logic turn the turret to the needed head and read the AD3 input wired to it. They
+don't position the probe or verify contact: they capture wherever the probe already is, so
+contact_verified is always false. A flat line or no_activity can mean the probe isn't
+touching anything. Read get_instrument_status and list_capture_profiles first, choose a
+profile or logic type by name, and cite capture IDs. Only status=ok carries measurements.
+Two-line protocols (I2C, SPI) use both arms' logic probes, one line each. SPI is partial:
+SCK plus one data line, no chip select, so its bytes are tentative.
+read_digital is a declared extension point and returns not_implemented.
+No model selection service or voice provider runs inside this server.
 """
 
 
@@ -75,23 +87,35 @@ def build_backend(settings: Settings):
         return UnavailableBackend(str(exc))
 
 
+@dataclass
+class Services:
+    measurement: MeasurementService
+    instruments: InstrumentService
+
+
 def create_mcp(settings: Settings | None = None) -> FastMCP:
     settings = settings or Settings()
 
     @asynccontextmanager
     async def lifespan(_):
-        service = MeasurementService(settings, build_backend(settings))
+        services = Services(
+            MeasurementService(settings, build_backend(settings)), InstrumentService(settings)
+        )
         try:
-            yield service
+            yield services
         finally:
-            await service.close()
+            await services.measurement.close()
+            await services.instruments.close()
 
     mcp = FastMCP("Hardware troubleshooter", instructions=INSTRUCTIONS, lifespan=lifespan)
     readonly = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
     movement = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
 
     def service(ctx: Context) -> MeasurementService:
-        return ctx.request_context.lifespan_context
+        return ctx.request_context.lifespan_context.measurement
+
+    def instruments(ctx: Context) -> InstrumentService:
+        return ctx.request_context.lifespan_context.instruments
 
     @mcp.tool(annotations=movement)
     async def measure_voltage(
@@ -177,8 +201,13 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
         result.update(
             mcp_busy=boundary.active is not None,
             execution_blocked=boundary.blocked,
-            implemented_tools=["measure_voltage"],
-            planned_tools=["capture_waveform", "read_digital", "capture_logic"],
+            implemented_tools=[
+                "measure_voltage",
+                "capture_waveform",
+                "capture_logic",
+                "select_tool",
+            ],
+            planned_tools=["read_digital"],
         )
         return result
 
@@ -196,34 +225,80 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
         """Read a stored result or unresolved operation. Never repeats movement."""
         return service(ctx).get_operation(request_id)
 
-    def unimplemented(target: str, tool: str):
+    @mcp.tool(annotations=readonly)
+    async def get_instrument_status(ctx: Context) -> dict[str, Any]:
+        """Read AD3 connection, each arm's reachability and current tool head, and the wiring.
+
+        Opens the AD3 if needed (read-only). No movement.
+        """
+        return await instruments(ctx).status()
+
+    @mcp.tool(annotations=readonly)
+    def list_capture_profiles(ctx: Context) -> dict[str, Any]:
+        """List the operator-configured scope profiles and logic types, with each logic type's
+        signal roles. capture_waveform and capture_logic accept only these names."""
+        try:
+            return {"status": "ok", "failure_reason": None, **instruments(ctx).profiles()}
+        except Refused as refused:
+            return {"status": "failed", "failure_reason": refused.reason}
+
+    @mcp.tool(annotations=movement)
+    async def select_tool(
+        arm: str, head: Literal["scope", "logic", "dmm"], ctx: Context
+    ) -> dict[str, Any]:
+        """Turn one arm's turret so this tool head is at the working position.
+
+        Only the turret turns; the arm doesn't move. The arm server refuses unless the tip is
+        well above the board. The capture tools select their head themselves.
+        """
+        return await instruments(ctx).select_tool(arm, head)
+
+    @mcp.tool(annotations=movement)
+    async def capture_waveform(arm: str, profile_id: str, ctx: Context) -> dict[str, Any]:
+        """Capture an AD3 scope trace from this arm's oscilloscope probe.
+
+        Selects the scope head (turret only) and reads its AD3 channel with the named profile.
+        Returns Vpp, min/max, mean, RMS, frequency, and duty cycle. clipped or no_trigger is
+        inconclusive. Probe placement and contact aren't verified.
+        """
+        result = await instruments(ctx).capture_waveform(arm, profile_id)
+        LOG.info(
+            "capture %s status=%s reason=%s",
+            result.capture_id,
+            result.status,
+            result.failure_reason,
+        )
+        return result.model_dump(mode="json")
+
+    @mcp.tool(annotations=movement)
+    async def capture_logic(logic_type: str, lines: dict[str, str], ctx: Context) -> dict[str, Any]:
+        """Capture and decode digital signals from the arms' logic probes.
+
+        lines maps each signal role of the logic type to an arm, e.g. {"rx": "A"} for UART,
+        {"scl": "A", "sda": "B"} for I2C, {"sck": "A", "data": "B"} for SPI, {"signal": "A"}
+        for PWM. Selects each arm's logic head (turret only). Placement isn't verified.
+        """
+        result = await instruments(ctx).capture_logic(logic_type, lines)
+        LOG.info(
+            "capture %s status=%s reason=%s",
+            result.capture_id,
+            result.status,
+            result.failure_reason,
+        )
+        return result.model_dump(mode="json")
+
+    @mcp.tool(annotations=readonly)
+    def read_digital(group_id: str) -> dict[str, Any]:
+        """Scaffold only: future static reads from prewired AD3 input groups. Not implemented."""
         return {
             "status": "failed",
             "reading": None,
             "mode": None,
             "failure_reason": "not_implemented",
-            "tool": tool,
-            "target": target,
-            "note": "No acquisition or movement was requested. ROS/AD3 integration is pending.",
+            "tool": "read_digital",
+            "target": group_id,
+            "note": "No acquisition was requested.",
         }
-
-    @mcp.tool(annotations=movement)
-    def capture_waveform(target: str, profile_id: str) -> dict[str, Any]:
-        """Scaffold only: future complete probing and AD3 analog capture. Not implemented."""
-        result = unimplemented(target, "capture_waveform")
-        if not TARGET_PATTERN.fullmatch(target):
-            result["failure_reason"] = "invalid_target"
-        return result
-
-    @mcp.tool(annotations=readonly)
-    def read_digital(group_id: str) -> dict[str, Any]:
-        """Scaffold only: future static reads from prewired AD3 input groups. Not implemented."""
-        return unimplemented(group_id, "read_digital")
-
-    @mcp.tool(annotations=readonly)
-    def capture_logic(group_id: str, profile_id: str) -> dict[str, Any]:
-        """Scaffold only: future AD3 digital-input capture. No outputs. Not implemented."""
-        return unimplemented(group_id, "capture_logic")
 
     @mcp.prompt()
     def troubleshoot_hardware(request: str) -> str:
@@ -237,7 +312,8 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
         return (
             "Codex model -> MCP task -> ROS action orchestrator -> registry/registration/"
             "motion/contact/instrument nodes -> structured evidence -> Codex explanation. "
-            "MCP never accesses hardware or transforms. Explicit stub mode is synthetic."
+            "MCP never accesses transforms. AD3 capture tools read the AD3 here and turn "
+            "arm tool turrets, but never position probes. Explicit stub/fake modes are synthetic."
         )
 
     return mcp

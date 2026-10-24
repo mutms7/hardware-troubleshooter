@@ -8,6 +8,7 @@ board along the probe). Each call is capped at 10 mm per axis; loop for bigger m
     arm.jog(right=2)            # nudge the probe right in the image
     arm.jog(up=-1, in_=0.5)
     arm.tilt(5)                 # tilt the probe 5 deg, tip stays put
+    arm.select_tool("logic")    # turn the turret to a tool head: scope, logic or dmm
     arm.stop()                  # hold position (real arm only)
 """
 import json
@@ -46,6 +47,13 @@ class Arm:
 
     def tilt(self, deg):
         return self._post({"cmd": "tilt", "deg": deg})
+
+    def select_tool(self, head):
+        """Turn the turret so this head is at the working position. Check state['tool'] == head.
+
+        Blocked (state['msg'] starts with 'blocked') unless the tip is well above the board.
+        """
+        return self._post({"cmd": "tool", "head": head})
 
     def stop(self):
         return self._post({"cmd": "stop"})

@@ -3,6 +3,8 @@ from typing import Literal
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .instruments.fake import FakeScenario
+
 
 class Settings(BaseSettings):
     # Ignore the old .env by design. No model-provider credentials are needed.
@@ -33,6 +35,13 @@ class Settings(BaseSettings):
         "bad_position",
     ] = "success"
     stub_step_s: float = Field(default=0.03, gt=0, le=1)
+    # AD3 instrument tools. Unset rig_config disables them; "fake" is never a fallback.
+    rig_config: str | None = None
+    instruments: Literal["ad3", "fake"] = "ad3"
+    ad3_serial: str | None = None
+    fake_scenario: FakeScenario = "success"
+    arm_timeout_s: float = Field(default=5.0, gt=0, le=30)
+    captures_dir: str = "data/captures"
 
     @property
     def effective_outer_timeout(self) -> float | None:

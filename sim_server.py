@@ -67,6 +67,11 @@ HOME_TIP = (-0.0787, -0.140, -0.020)
 # Turret presets, degrees. Three probes; edit to match the real detents.
 PROBE_ANGLES = (-120.0, 0.0, 120.0)
 PROBE_START = 1
+# Which tool head sits in each slot above (scope and logic are AD3 probes, dmm is the separate
+# multimeter). Edit to match the real turret.
+TOOL_HEADS = ("scope", "logic", "dmm")
+# The turret swings the other tips past the board, so it only turns this far above it.
+TOOL_CHANGE_CLEARANCE_MM = 20.0
 
 mimetypes.add_type("application/octet-stream", ".stl")
 mimetypes.add_type("text/xml; charset=utf-8", ".urdf")
@@ -237,10 +242,20 @@ class Sim:
         if not 0 <= new < len(PROBE_ANGLES):
             self.msg = f"blocked: only probes 1 to {len(PROBE_ANGLES)}"
             return
+        if new != self.probe_idx and self.height_mm() < TOOL_CHANGE_CLEARANCE_MM:
+            self.msg = (f"blocked: lift to {TOOL_CHANGE_CLEARANCE_MM:.0f} mm above the board "
+                        "before turning the turret")
+            return
         # Only the turret (ID 5) turns. The arm does not move, so the tip jumps to the new probe.
         self.probe_idx = new
         self.q[TURRET_IDX] = math.radians(PROBE_ANGLES[new])
         self.msg = "ok"
+
+    def select_tool(self, head):
+        if head not in TOOL_HEADS:
+            self.msg = f"unknown tool head: {head!r} ({', '.join(TOOL_HEADS)})"
+            return
+        self.probe(TOOL_HEADS.index(head) - self.probe_idx)
 
     def state(self):
         tip, shaft, phi = self.pose(self.q)
@@ -259,6 +274,8 @@ class Sim:
             "probe": self.probe_idx + 1,
             "probe_deg": PROBE_ANGLES[self.probe_idx],
             "probe_count": len(PROBE_ANGLES),
+            "tool": TOOL_HEADS[self.probe_idx],
+            "tools": list(TOOL_HEADS),
             "msg": self.msg,
         }
 
@@ -421,10 +438,15 @@ class Handler(BaseHTTPRequestHandler):
                     SIM.touch_off()
                 elif cmd == "tilt":
                     SIM.tilt(float(body.get("deg", 0)) / TILT_STEP_DEG)
+                elif cmd == "tool":
+                    if HW and not HW.probes:
+                        SIM.msg = "no probe positions taught: ID 5 not moved (calibrate.py --probes-only 3)"
+                    else:
+                        SIM.select_tool(body.get("head"))
                 elif cmd == "stop" and HW:
                     HW.stop()
                 elif cmd != "state":
-                    SIM.msg = f"unknown command: {cmd!r} (jog, tilt, stop, state)"
+                    SIM.msg = f"unknown command: {cmd!r} (jog, tilt, tool, stop, state)"
             elif path == "/api/arm" and HW:
                 try:
                     HW.arm(bool(body.get("on")))
@@ -449,6 +471,7 @@ if __name__ == "__main__":
     ap.add_argument("--baud", type=int, default=1_000_000)
     ap.add_argument("--speed", type=int, default=300, help="servo speed limit, steps/s (4096 = one turn)")
     ap.add_argument("--accel", type=int, default=20, help="servo acceleration, 0-254")
+    ap.add_argument("--port", type=int, default=PORT, help="HTTP port; give each arm its own")
     args = ap.parse_args()
     if args.hardware:
         HW = Hardware(SIM, args.hardware, args.baud, args.speed, args.accel)
@@ -458,5 +481,5 @@ if __name__ == "__main__":
             print("No probe positions in calibration.json: ID 5 will not move.")
     else:
         print("Simulation only, no serial port.")
-    print(f"Open http://localhost:{PORT}")
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    print(f"Open http://localhost:{args.port}")
+    ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()
