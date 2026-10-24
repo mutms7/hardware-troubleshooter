@@ -1,0 +1,39 @@
+{
+  "image": "bldc_reference_new.png",
+  "frame": {
+    "width": 1920,
+    "height": 1080
+  },
+  "note": "The three metal contacts of the black 3-pin connector after it was moved; A = upper-left, C = lower-right. Pixel coordinates in the reference image.",
+  "arm_pose_at_capture": {
+    "tip_mm": [
+      -4.742009398257271,
+      -153.01367978548373,
+      -15.00279511795259
+    ],
+    "height_mm": 37.60363647631525
+  },
+  "points": [
+    {
+      "name": "A",
+      "px": [
+        999.6,
+        588.8
+      ]
+    },
+    {
+      "name": "B",
+      "px": [
+        1010.1,
+        600.3
+      ]
+    },
+    {
+      "name": "C",
+      "px": [
+        1019.3,
+        613.1
+      ]
+    }
+  ]
+}
