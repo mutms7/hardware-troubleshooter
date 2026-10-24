@@ -1,0 +1,33 @@
+# Complete measurement task. No coordinates or motion commands from the model.
+string target
+string request_id
+---
+# Only status=ok permits a finite reading. All other statuses require NaN.
+string request_id
+string status
+float64 reading
+string units
+string requested_target
+string test_point
+string net
+bool contact_verified
+bool move_completed
+bool position_ok
+string contact
+bool board_unmoved
+bool calibration_valid
+string registration_id
+# completed | failed | unknown | not_attempted
+string retraction_status
+# Final physical stop state, NOT the action cancel acknowledgement.
+bool stop_confirmed
+uint32 attempts
+# JSON objects for deterministic recovery only. No model recovery service.
+string[] recovery_log
+string failure_reason
+# simulated | live, always supplied by the orchestrator
+string mode
+uint32 duration_ms
+---
+string stage
+uint32 attempt

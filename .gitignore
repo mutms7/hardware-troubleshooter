@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+.venv/
+.venv-ros/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+data/
+dist/
+*.egg-info/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
