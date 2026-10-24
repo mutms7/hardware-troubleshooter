@@ -21,9 +21,9 @@ Start with [Simon's handoff](docs/SIMON_HANDOFF.md) and the
 Jev, TypeSafe, RoboTwin, and Cartesia aren't active dependencies or execution paths.
 Voice can later be a separate client using these measurement tools.
 
-There is no hardware backend, orchestrator, arm controller, contact verifier, or AD3
-driver here. The default backend (`none`) reports `orchestrator_unavailable` for every
-measurement. Passing tests here doesn't prove a physical measurement.
+There is no real camera implementation, measurement orchestrator, or contact verifier
+here. The AD3 capture tools and tool-head selection are in [docs/AD3.md](docs/AD3.md).
+Passing tests here doesn't prove a physical measurement.
 
 ## Run the software simulator
 
@@ -91,13 +91,18 @@ simulation returns 3.29 V with `mode=simulated`. It demonstrates the interface o
 | `get_rig_status()` | Reads orchestrator state and reports the MCP busy/uncertainty latch. |
 | `abort()` | Requests cancel and waits briefly for final stop/retraction checks. |
 | `get_operation(request_id)` | Reads progress state or a saved result without repeating motion. |
-| `capture_waveform(target, profile_id)` | Explicit `not_implemented` extension point. |
+| `get_instrument_status()` | Reads AD3 connection, each arm's current tool head, and the wiring. |
+| `list_capture_profiles()` | Lists the configured scope profiles and logic types. |
+| `select_tool(arm, head)` | Turns one arm's turret to the scope, logic, or multimeter head. |
+| `capture_waveform(arm, profile_id)` | Selects the scope head and captures its AD3 channel. |
+| `capture_logic(logic_type, lines)` | Selects logic heads and captures and decodes UART, PWM, I2C, or partial SPI. |
 | `read_digital(group_id)` | Explicit `not_implemented` extension point. |
-| `capture_logic(group_id, profile_id)` | Explicit `not_implemented` extension point. |
 
-The AD3 extension tools never fabricate captures. Their future implementations go
-through the orchestrator; hardware access stays outside MCP. Digital input groups
-will use fixed, configured wiring to minimize arm movement.
+The AD3 tools run the WaveForms SDK on this host and capture wherever the probe already
+is: they don't position it or verify contact. They need `TH_RIG_CONFIG`, and only
+`TH_INSTRUMENTS=fake` simulates them. See [docs/AD3.md](docs/AD3.md) for wiring,
+ground precautions, configuration, and outcomes. The multimeter head is a separate
+device that isn't driven yet.
 
 Each measurement returns status, nullable reading, units, requested/resolved target,
 contact and stage checks, failure reason, request ID, mode, duration, and registration ID.
