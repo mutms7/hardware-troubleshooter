@@ -1,9 +1,8 @@
 # Per-rig registration config. Every value is unset; fill each one from a calibration
-# or a measurement on the real bench. The node never substitutes defaults.
+# or a measurement on the real bench. The engine never substitutes defaults.
 
 # Registration runs on the fixed camera. Its base -> camera transform must not change.
-base_frame: null        # arm base TF frame, e.g. so_arm_description's base link with that
-                        # arm's frame_prefix; board -> base is looked up through TF
+base_frame: null        # arm base frame that the camera extrinsic below is expressed in
 
 # Bench plane in the fixed camera's optical frame: points X on the bench satisfy n . X = d.
 # n points from the camera toward the bench. Measure it, e.g. with a calibration
@@ -22,8 +21,8 @@ thresholds:
   tracking_loss_timeout_s: null  # tracking_lost after this long without a confirming frame
   feature_min_contrast: null     # 0-1 intensity contrast for the asymmetric feature to count
 
-# Read only by the launch file when publish_extrinsic:=true. Leave it unset if
-# another node already publishes base -> camera.
+# Fixed camera pose in base_frame (hand-eye calibration). rig_from_dict doesn't read
+# it; whatever drives RegistrationEngine passes it to set_extrinsic().
 camera_extrinsic:
   camera_frame: null        # fixed camera's optical frame id, as in its image header
   translation_m: null       # [x, y, z] of the camera in base_frame

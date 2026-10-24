@@ -1,4 +1,4 @@
-"""Write a synthetic image folder, camera_info and configs for playback testing. No ROS.
+"""Write a synthetic image folder, camera_info and configs for offline testing.
 
 The sequence is: static board, board moved, board covered. Every value describes an
 imaginary rig; the generated configs say so and must not be reused for live hardware.

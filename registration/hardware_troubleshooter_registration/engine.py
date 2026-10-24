@@ -1,4 +1,4 @@
-"""Registration state: revisions, invalidation, calibration status. No ROS imports.
+"""Registration state: revisions, invalidation, calibration status.
 
 A revision's pose is fixed when it is created. Later frames only confirm it (within
 the move thresholds) or invalidate it. An invalidated revision is never reported
@@ -278,7 +278,7 @@ class RegistrationEngine:
             ippe_offset_m=source.ippe_offset_m if source is not None else None,
         )
 
-    def tf_to_publish(self, now: float):
+    def board_transform(self, now: float):
         """(parent, child, rotation, translation) only while fully valid; otherwise None."""
         snapshot = self.snapshot(now)
         if snapshot.status != "valid":
