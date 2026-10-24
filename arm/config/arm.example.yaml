@@ -27,7 +27,8 @@ toolhead:
   upper_rad: null
   select_tolerance_rad: null  # max |measured - select_rad| for a tool to count as selected
   tools: []
-  #  - name: probe
+  # Name tools after the instrument service's turret heads (scope, logic, dmm).
+  #  - name: scope
   #    select_rad: null     # toolhead_joint angle that puts this tool in service
   #    tip:                 # toolhead_link -> tool tip; z should point along the approach
   #      xyz_m: null

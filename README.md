@@ -9,6 +9,8 @@ Start with [Simon's handoff](docs/SIMON_HANDOFF.md) and the
 [ARCHITECTURE.md](ARCHITECTURE.md) explains ownership and failure handling.
 [registration/](registration/README.md) holds the CV board registration library.
 [arm/](arm/README.md) builds each Maker Arm's URDF and SDK profile for the rotating toolhead.
+[vision/](vision/README.md) is the CV service: fixed-camera registration through arm
+occlusion, wrist-camera pad alignment, touchdown, scene guard, thermal, calibration.
 
 ## What works here
 
@@ -18,6 +20,7 @@ Start with [Simon's handoff](docs/SIMON_HANDOFF.md) and the
 - Busy rejection, bounded cancellation, request IDs, and persistent execution uncertainty.
 - A software simulator that exercises the MCP flow without hardware.
 - Board-edge CV registration as a plain Python library, tested on synthetic frames.
+- The vision service and bench calibration, tested end to end on synthetic views.
 
 Jev, TypeSafe, RoboTwin, and Cartesia aren't active dependencies or execution paths.
 Voice can later be a separate client using these measurement tools.
@@ -129,7 +132,8 @@ Tests start a real MCP subprocess and exercise success, failed contact, unknown
 target, moved board, stale calibration, malformed results, timeout, explicit abort,
 MCP request cancellation, busy rejection, replay protection, and persistence after
 uncertain execution. The registration library has its own suite, which needs numpy,
-OpenCV and PyYAML: `python -m pytest -q registration/test`.
+OpenCV and PyYAML: `python -m pytest -q registration/test`. Run `arm/test` and
+`vision/test` the same way, each folder on its own.
 
 Unknown execution is latched in `data/mcp_operations.sqlite3`. No MCP reset tool
 can dismiss it. The real orchestrator/operator recovery procedure remains a required
