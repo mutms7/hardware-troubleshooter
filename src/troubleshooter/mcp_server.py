@@ -19,7 +19,7 @@ LOG = logging.getLogger(__name__)
 INSTRUCTIONS = """Investigate circuit problems using measured evidence.
 Read get_rig_status and list_test_points before requesting a measurement. Choose a
 registered pad, component-pin identity, or net. Don't invent coordinates or pin maps.
-measure_voltage requests a complete task from ROS, including approach and retraction.
+measure_voltage requests a complete task from the orchestrator, including approach and retraction.
 Read each result before requesting another measurement. One bench runs one task at a time.
 Only status=ok with a non-null reading is usable circuit evidence. Inconclusive contact
 isn't evidence of zero volts or of a component fault. Cite request IDs and preserve mode.
@@ -78,13 +78,8 @@ def build_backend(settings: Settings):
         from .stub import StubBackend
 
         return StubBackend(settings)
-    try:
-        from .ros_backend import RosBackend
-
-        return RosBackend(settings)
-    except (ImportError, RuntimeError, OSError) as exc:
-        LOG.error("ROS backend unavailable: %s", exc)
-        return UnavailableBackend(str(exc))
+    LOG.error("No hardware backend is implemented; measurements will fail closed")
+    return UnavailableBackend("No hardware backend is implemented")
 
 
 @dataclass
@@ -123,7 +118,7 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
     ) -> dict[str, Any]:
         """Request a complete DC voltage measurement at a registered pad, pin, or net.
 
-        ROS handles localization, approach, verification, acquisition, and retraction.
+        The orchestrator handles localization, approach, verification, acquisition, and retraction.
         Only status=ok returns a usable reading. Inconclusive contact is NOT 0 V and
         doesn't establish a fault. Failed results explain why execution stopped.
         Only one measurement can run. Optional request_id deduplicates exact retries;
@@ -154,7 +149,7 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
 
     @mcp.tool(annotations=readonly)
     async def list_test_points(ctx: Context) -> dict[str, Any]:
-        """Read registered electrical targets from ROS. The registry is the source of truth."""
+        """Read registered electrical targets from the orchestrator. The registry is the source of truth."""
         try:
             raw = await service(ctx).backend.list_test_points()
             result = RegistryReply.model_validate(raw)
@@ -179,7 +174,7 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
 
     @mcp.tool(annotations=readonly)
     async def get_rig_status(ctx: Context) -> dict[str, Any]:
-        """Read ROS hardware/registration state and the MCP execution latch. No movement."""
+        """Read orchestrator hardware/registration state and the MCP execution latch. No movement."""
         boundary = service(ctx)
         try:
             raw = await boundary.backend.get_rig_status()
@@ -213,7 +208,7 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
 
     @mcp.tool(annotations=movement)
     async def abort(ctx: Context) -> dict[str, Any]:
-        """Cancel the active ROS goal. Acknowledgement alone doesn't confirm physical stopping.
+        """Cancel the active goal. Acknowledgement alone doesn't confirm physical stopping.
 
         Returns confirmed final checks when available; otherwise execution remains
         uncertain and later measurements are blocked. This isn't a hardware E-stop.
@@ -310,7 +305,7 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
     @mcp.resource("hardware://architecture")
     def architecture() -> str:
         return (
-            "Codex model -> MCP task -> ROS action orchestrator -> registry/registration/"
+            "Codex model -> MCP task -> measurement orchestrator -> registry/registration/"
             "motion/contact/instrument nodes -> structured evidence -> Codex explanation. "
             "MCP never accesses transforms. AD3 capture tools read the AD3 here and turn "
             "arm tool turrets, but never position probes. Explicit stub/fake modes are synthetic."

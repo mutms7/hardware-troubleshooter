@@ -2,7 +2,6 @@
 .env.*
 !.env.example
 .venv/
-.venv-ros/
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -10,7 +9,4 @@ __pycache__/
 data/
 dist/
 *.egg-info/
-ros2_ws/build/
-ros2_ws/install/
-ros2_ws/log/
 .pio/

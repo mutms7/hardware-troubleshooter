@@ -1,5 +1,0 @@
----
-string status
-string mode
-hardware_troubleshooter_interfaces/TestPoint[] targets
-string failure_reason

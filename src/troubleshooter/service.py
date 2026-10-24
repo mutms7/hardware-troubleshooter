@@ -25,7 +25,7 @@ class Active:
 
 
 class MeasurementService:
-    """MCP boundary only. The ROS orchestrator owns every physical execution stage."""
+    """MCP boundary only. The measurement orchestrator owns every physical execution stage."""
 
     def __init__(self, settings: Settings, backend: Backend):
         self.settings, self.backend = settings, backend
@@ -157,7 +157,7 @@ class MeasurementService:
             )
         except Exception:  # noqa: BLE001 - unresolved cancellation must fail closed
             if active.result_task:
-                # Retain the ROS goal and late-cancel intent, but consume eventual errors.
+                # Retain the goal and late-cancel intent, but consume eventual errors.
                 active.result_task.add_done_callback(_consume_result)
             return failure(active.request_id, active.target, reason, uncertain=True)
 

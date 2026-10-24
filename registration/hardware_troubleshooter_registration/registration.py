@@ -1,4 +1,4 @@
-"""Board-edge registration of one camera frame. No ROS imports.
+"""Board-edge registration of one camera frame.
 
 Segment the board, fit a straight line to each outline edge in undistorted pixels,
 intersect neighbouring lines for sub-pixel corners, intersect the corner rays with

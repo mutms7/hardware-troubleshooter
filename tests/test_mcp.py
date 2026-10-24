@@ -167,15 +167,8 @@ async def test_outer_timeout_and_uncertain_restart(tmp_path, scenario, uncertain
             assert blocked["failure_reason"] == "uncertain_motion_state"
 
 
-async def test_ros_unavailable_never_falls_back_to_stub(tmp_path):
-    # This test deliberately uses a missing ROS installation or no action server.
-    async with connection(
-        tmp_path,
-        backend="ros",
-        outer_timeout_s=2,
-        cancel_grace_s=1,
-        action_name="/hardware_test_intentionally_absent_server",
-    ) as client:
+async def test_missing_backend_never_falls_back_to_stub(tmp_path):
+    async with connection(tmp_path, backend="none", outer_timeout_s=2, cancel_grace_s=1) as client:
         result = await call(client, "measure_voltage", target="TP_DEMO")
         assert result["failure_reason"] == "orchestrator_unavailable"
         assert result["reading"] is None
@@ -184,7 +177,7 @@ async def test_ros_unavailable_never_falls_back_to_stub(tmp_path):
 
 async def test_mcp_request_cancellation_reaches_backend(tmp_path):
     async with connection(tmp_path, "slow") as client:
-        # Capture the protocol ID before dispatch; it differs from the ROS request_id.
+        # Capture the protocol ID before dispatch; it differs from the measurement request_id.
         protocol_id = client._request_id
         running = asyncio.create_task(
             call(client, "measure_voltage", target="TP_DEMO", request_id="client-cancel")
