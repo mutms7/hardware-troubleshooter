@@ -42,8 +42,10 @@ without an encoding, which fails under Windows' default code page.
 | [switch_protocol_gsusb.py](switch_protocol_gsusb.py) | off | Run the SDK's MIT ↔ private protocol switch over this adapter. Power-cycle after. |
 
 Only one process can hold the adapter. teach.py and run.py run in the background, read
-commands from `work/cmd/` and publish `work/state.json` and `work/log.txt` (all ignored by
-git). Taught points live in [work/teach.yaml](work/teach.yaml), which is tracked.
+commands from `work/cmd/` (ignored by git) and publish `work/state.json` (the live pose,
+torques and faults) and `work/log.txt` (every move). Taught points live in
+[work/teach.yaml](work/teach.yaml). All three are tracked; the committed state and log are
+from the last full run on the arm.
 
 ## Teaching
 
