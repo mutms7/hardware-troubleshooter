@@ -31,6 +31,7 @@ Voice can later be a separate client using these measurement tools.
 
 There is no real camera implementation, measurement orchestrator, or contact verifier
 here. The AD3 capture tools and tool-head selection are in [docs/AD3.md](docs/AD3.md).
+Collision avoidance between the two arms is in [docs/WORKCELL.md](docs/WORKCELL.md).
 The KiCad design index, probe-point ranking, camera pad overlays, datasheet search (Moss),
 and the Claude Code plugin with its debugging skills are in
 [docs/DESIGN_TOOLS.md](docs/DESIGN_TOOLS.md).

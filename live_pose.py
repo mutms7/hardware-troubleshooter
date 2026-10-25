@@ -8,8 +8,13 @@
 The window shows: the board outline and header pads, the TARGET pad (orange ring), the point on the board directly under the
 needle (cyan cross; this is what gets aligned), a line between them with the error in mm, the needle's height above the board,
 and which solver is giving the pose.  q / Esc closes it.
+
+The same annotated frame is written to FEED_JPG about 5 times a second; the arm server serves it at /api/feed.jpg and the sim
+viewer shows it. Without a GUI-capable OpenCV (opencv-python-headless) there is no window, only the feed.
 """
 import json
+import os
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -22,6 +27,8 @@ from pcb_pnp import find_pad, solve_frame
 from pnp_test import load_intrinsics
 
 HERE = Path(__file__).resolve().parent
+FEED_JPG = Path(tempfile.gettempdir()) / "troubleshooter_live_feed.jpg"   # read by sim_server.py
+FEED_PERIOD_S = 0.2
 LATENCY_S = 0.3          # frames are about this old by the time they are read: ignore poses from before (t + LATENCY_S)
 
 
@@ -185,25 +192,51 @@ class LivePose:
         cv2.putText(img, txt2, (12, img.shape[0] - 14), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
         return img
 
+    def publish(self, img):
+        """Write the annotated frame for the sim viewer (atomic replace, so the server never reads half a file)."""
+        ok, buf = cv2.imencode(".jpg", cv2.resize(img, (960, 540)), [cv2.IMWRITE_JPEG_QUALITY, 75])
+        if not ok:
+            return
+        tmp = FEED_JPG.with_suffix(".tmp")
+        tmp.write_bytes(buf.tobytes())
+        try:
+            os.replace(tmp, FEED_JPG)
+        except PermissionError:                 # the server is reading it right now; the next frame will do
+            pass
+
     def gui(self, alive, linger_s=10.0):
         """Run on the main thread. Returns when q/Esc is pressed, or linger_s after `alive()` turns False."""
         win = "needle alignment (q to close)"
-        cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(win, 1280, 720)
-        ended = None
+        try:
+            cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(win, 1280, 720)
+            window = True
+        except cv2.error:
+            print(f"no OpenCV window (headless build): watch the feed in the sim viewer ({FEED_JPG})", flush=True)
+            window = False
+        ended, published = None, 0.0
         while True:
             with self._lock:
                 frame, pose = self._frame, self._pose
             if frame is not None:
-                cv2.imshow(win, self.draw(frame, pose))
-            if cv2.waitKey(20) & 0xFF in (ord("q"), 27):
-                self.stop.set()
-                break
+                img = self.draw(frame, pose)
+                if window:
+                    cv2.imshow(win, img)
+                if time.time() - published >= FEED_PERIOD_S:
+                    self.publish(img)
+                    published = time.time()
+            if window:
+                if cv2.waitKey(20) & 0xFF in (ord("q"), 27):
+                    self.stop.set()
+                    break
+            else:
+                time.sleep(0.02)
             if not alive():
                 ended = ended or time.time()
                 if time.time() - ended > linger_s:
                     break
-        cv2.destroyAllWindows()
+        if window:
+            cv2.destroyAllWindows()
 
     def close(self):
         self.stop.set()

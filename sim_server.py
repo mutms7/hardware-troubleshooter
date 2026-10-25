@@ -8,21 +8,30 @@ the new joint angles.
 The solver holds two things at once: the probe-tip position and the probe's tilt from
 straight down (phi). Moving the tip keeps phi fixed, and changing phi keeps the tip fixed.
 
+With --arm, this arm shares the bench with the others in config/workcell.json: every move is
+checked against where the other arms are (collision.py) and `goto` plans a path around them.
+
 With --sensors, this server owns the ESP32 sensor head (sensor_head.py): its ToF becomes a
 second height estimate, and the step governor, floor stop and turret clearance use whichever of
 the model and the ToF is lower. Both sensors are served at /api/sensors for the MCP.
 
   python sim_server.py          then open http://localhost:8765
+  python sim_server.py --arm A --port 8765      and in another terminal
+  python sim_server.py --arm B --port 8766
   python sim_server.py --hardware COM10 --sensors COM5
 """
 import argparse
 import json
 import math
 import mimetypes
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 import warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import pairwise
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -31,6 +40,7 @@ from ikpy.chain import Chain
 import serial
 from scipy.optimize import least_squares
 
+import collision
 import sensor_head
 from calibrate import JOINTS, PROBE_ID, TICKS, Bus, delta
 from fk_test import CHAIN_INDEX, SIGN, ZERO_DEG
@@ -53,6 +63,8 @@ TABLE_Z = -0.0554
 BOARD_THICKNESS = 0.005
 BOARD_Z = TABLE_Z + BOARD_THICKNESS
 FLOOR_MARGIN = 0.002       # the probe never goes lower than this above the board surface
+CONTACT_MAX_MM = 8.0       # ...except a deliberate touch (move contact_mm), at most this far below it
+CONTACT_MIN_STEP_MM = 2.0  # and the governor doesn't shorten a touch's steps below this: the servos ignore smaller ones
 # The URDF's tip point is offset from the mount and isn't known to be mm-accurate, so until the
 # board height is touched off the model's height is reduced by this much (camera overrides it).
 TIP_UNCERTAINTY_MM = 5.0
@@ -82,6 +94,14 @@ PROBE_START = 1
 TOOL_HEADS = ("scope", "logic", "dmm")
 # The turret swings the other tips past the board, so it only turns this far above it.
 TOOL_CHANGE_CLEARANCE_MM = 20.0
+# When the other arm is in the way of a move, try tilting the probe up to this far either side
+# (the tip still lands on the same point).
+TILT_AROUND_DEG = 20.0
+# goto: lift straight up to this height, travel around the other arm, come straight down.
+TRAVEL_MM = 30.0
+PLAN_STEP_DEG = 5.0        # executed waypoints are at most this far apart on any joint
+PLAN_SWEEP_MM = 10.0       # goto checks its path coarser than a jog, with that much more margin
+SIM_STEP_S = 0.05          # sim only: pause between waypoints so the viewer shows the motion
 # Sensor head ToF (--sensors). Its beam is assumed parallel to the probe shaft. A reading older
 # than this, or taken with the probe tilted further than this, isn't used.
 TOF_MAX_AGE_S = 0.3
@@ -106,6 +126,7 @@ class Sim:
         self.lo, self.hi = np.array(lo), np.array(hi)
         # ToF range with each head's tip touching the board. Mount geometry, so reset keeps it.
         self.tof_zero_mm = {}
+        self.board_z_default = BOARD_Z  # before any touch_off; --floor-offset-mm lowers it
         self.reset()
 
     def pose(self, q):
@@ -165,12 +186,14 @@ class Sim:
         q0 = np.zeros(13)
         q0[TURRET_IDX] = math.radians(PROBE_ANGLES[PROBE_START])
         q, pos_err, phi_err = self.solve(np.array(HOME_TIP), 0.0, q0)
+        if hasattr(self, "q") and not self.claim(q):
+            return
         self.q = q
         self.phi_target = 0.0
         self.probe_idx = PROBE_START
         self.note = ""
         self.retreating = False
-        self.board_z = BOARD_Z
+        self.board_z = self.board_z_default
         self.calibrated = False
         self.msg = "ready" if pos_err < POS_TOL_MM and phi_err < PHI_TOL_DEG else (
             f"reset pose is off by {pos_err:.1f} mm / {phi_err:.1f} deg")
@@ -214,17 +237,54 @@ class Sim:
         right = right / np.linalg.norm(right) if np.linalg.norm(right) > 1e-6 else np.array([1.0, 0.0, 0.0])
         self.move((right * right_mm + up * up_mm + depth * in_mm) / 1000.0, height_mm)
 
+    def joints(self, q=None):
+        q = self.q if q is None else q
+        return {self.chain.links[i].name: float(q[i]) for i in CHAIN_INDEX.values()}
+
+    def claim(self, q):
+        """Reserve pose q against the other arms. False (and msg says why) if it isn't clear."""
+        if WORKCELL is None:
+            return True
+        if WORKCELL.commit(self.joints(), self.joints(q)):
+            return True
+        self.msg = WORKCELL.msg
+        return False
+
+    def announce(self):
+        """Tell the other arms where this one is, without checking: it's already there."""
+        if WORKCELL is not None:
+            with WORKCELL.lock():
+                WORKCELL.publish(self.joints())
+
+    def _solve_step(self, target, phi_target, label):
+        q, pos_err, phi_err = self.solve(target, phi_target, self.q)
+        if pos_err > POS_TOL_MM or phi_err > PHI_TOL_DEG:
+            return None, f"unreachable: {label} misses by {pos_err:.1f} mm / {phi_err:.1f} deg (joint limits)"
+        swing = max(abs(math.degrees(q[i] - self.q[i])) for i in ARM_IDX)
+        if swing > MAX_JOINT_STEP_DEG:
+            return None, f"blocked: would swing a joint {swing:.0f} deg in one step"
+        return q, ""
+
     def _try(self, target, phi_target, label):
         if target[2] < self.board_z:
             self.msg = f"blocked: z {target[2]*1000:.0f} mm is below the board plane"
             return False
-        q, pos_err, phi_err = self.solve(target, phi_target, self.q)
-        if pos_err > POS_TOL_MM or phi_err > PHI_TOL_DEG:
-            self.msg = f"unreachable: {label} misses by {pos_err:.1f} mm / {phi_err:.1f} deg (joint limits)"
+        q, why = self._solve_step(target, phi_target, label)
+        if q is None:
+            self.msg = why
             return False
-        swing = max(abs(math.degrees(q[i] - self.q[i])) for i in ARM_IDX)
-        if swing > MAX_JOINT_STEP_DEG:
-            self.msg = f"blocked: would swing a joint {swing:.0f} deg in one step"
+        if not self.claim(q):
+            # The other arm is in the way. Same tip point, different probe tilt?
+            blocked = self.msg
+            steps = int(TILT_AROUND_DEG // TILT_STEP_DEG)
+            for k in (s * sign for s in range(1, steps + 1) for sign in (1, -1)):
+                phi = phi_target + k * TILT_STEP_DEG
+                q, _ = self._solve_step(target, phi, label)
+                if q is not None and self.claim(q):
+                    self.q, self.phi_target, self.msg = q, phi, "ok"
+                    self.note = f"tilted to {phi:.0f} deg to clear the other arm"
+                    return True
+            self.msg = blocked
             return False
         self.q, self.phi_target, self.msg = q, phi_target, "ok"
         return True
@@ -281,26 +341,49 @@ class Sim:
         h, tof = self.height_mm(), self.tof_height_mm()
         return h if tof is None else min(h, tof)
 
-    def touch_off(self):
+    def touch_off(self, tip_z=None, tof_mm=None, zero_tof=True):
         """Call when the probe tip is physically touching the board: ties the model to reality,
-        and zeroes the ToF for the current head."""
-        self.board_z = float(self.pose(self.q)[0][2])
+        and zeroes the ToF for the current head.
+
+        tip_z (m): the tip height to use, e.g. the encoders' measured tip, which is above the
+        commanded one while the probe is pushing on the board. Default: the commanded tip.
+        tof_mm: the ToF zero to use, e.g. a median over many readings. Default: the latest reading.
+        zero_tof=False leaves the ToF zeros alone (its reading at contact depends on the spot)."""
+        self.board_z = float(self.pose(self.q)[0][2] if tip_z is None else tip_z)
         self.calibrated = True
         self.msg = f"board height set from the tip: z = {self.board_z * 1000:.1f} mm"
+        head = TOOL_HEADS[self.probe_idx]
+        if not zero_tof:
+            return
+        if tof_mm is not None:
+            self.tof_zero_mm[head] = float(tof_mm)
+            self.msg += f"; ToF zero for {head}: {float(tof_mm):.1f} mm"
+            return
         tof = self.tof()
         if tof is not None:
-            head = TOOL_HEADS[self.probe_idx]
             if tof["valid"] and tof["age_s"] <= TOF_MAX_AGE_S:
                 self.tof_zero_mm[head] = tof["range_mm"]
                 self.msg += f"; ToF zero for {head}: {tof['range_mm']} mm"
             else:
                 self.msg += f"; ToF not zeroed ({tof['why'] or 'no reading'})"
 
-    def move(self, d, height_mm=None):
+    def clear_touch_off(self):
+        """Forget the board height and ToF zeros from touch_off, back to the startup floors.
+        Run before re-calibrating: a stale board height can sit above the real board."""
+        self.board_z = self.board_z_default
+        self.calibrated = False
+        self.tof_zero_mm = {}
+        self.msg = f"touch-off cleared: board z back to {self.board_z * 1000:.1f} mm, ToF not zeroed"
+
+    def move(self, d, height_mm=None, contact_mm=None):
         """Move the tip by d (meters), shortened by the step governor and stopped at the floor.
 
         height_mm is the height above the board the camera sees. When given it overrides the
         URDF-based estimate, because the camera is trusted over the model.
+        contact_mm: a deliberate touch. Once the board height is touched off, the command may go
+        this far below the board (at most CONTACT_MAX_MM) instead of stopping FLOOR_MARGIN above
+        it: the servos lag the command by a few mm near the board, so the caller stops on the
+        encoders (measure), not on the command.
         """
         tip, _, _ = self.pose(self.q)
         d = np.array(d, dtype=float)
@@ -312,11 +395,16 @@ class Sim:
         # Moving straight away from the board can't hurt it, so retreating isn't slowed or shortened.
         self.retreating = bool(d[2] > 0 and d[2] >= 0.9 * np.linalg.norm(d))
         cap = CAP_FAR_MM if self.retreating else self.step_cap_mm(h)
+        if contact_mm is not None and self.calibrated:
+            cap = max(cap, CONTACT_MIN_STEP_MM)  # the caller checks the encoders after every step
         biggest = float(np.max(np.abs(d))) * 1000.0
         if biggest > cap:
             d *= cap / biggest
             self.note = f"shortened to {cap:.1f} mm ({h:.0f} mm above board)"
-        room = (h - FLOOR_MARGIN * 1000.0) / 1000.0                # how far down we may still go
+        margin = FLOOR_MARGIN * 1000.0
+        if contact_mm is not None and self.calibrated:
+            margin = -min(max(float(contact_mm), 0.0), CONTACT_MAX_MM)
+        room = (h - margin) / 1000.0                               # how far down we may still go
         room = min(room, tip[2] - (TABLE_Z + FLOOR_MARGIN))        # never below the table
         if d[2] < 0 and -d[2] > room:
             if room > 1e-4:
@@ -374,8 +462,11 @@ class Sim:
                         "before turning the turret")
             return
         # Only the turret (ID 5) turns. The arm does not move, so the tip jumps to the new probe.
-        self.probe_idx = new
-        self.q[TURRET_IDX] = math.radians(PROBE_ANGLES[new])
+        q = self.q.copy()
+        q[TURRET_IDX] = math.radians(PROBE_ANGLES[new])
+        if not self.claim(q):
+            return
+        self.probe_idx, self.q = new, q
         self.msg = "ok"
 
     def select_tool(self, head):
@@ -383,6 +474,102 @@ class Sim:
             self.msg = f"unknown tool head: {head!r} ({', '.join(TOOL_HEADS)})"
             return
         self.probe(TOOL_HEADS.index(head) - self.probe_idx)
+
+    def _vertical(self, q, z_to, phi):
+        """IK poses moving the tip of pose q straight up or down to height z_to, 2 mm apart."""
+        tip = self.pose(q)[0]
+        n = max(1, math.ceil(abs(z_to - tip[2]) / 0.002))
+        out = []
+        for k in range(1, n + 1):
+            target = np.array([tip[0], tip[1], tip[2] + (z_to - tip[2]) * k / n])
+            q, pos_err, phi_err = self.solve(target, phi, q)
+            if pos_err > POS_TOL_MM or phi_err > PHI_TOL_DEG:
+                return None
+            out.append(q)
+        return out
+
+    def plan_to(self, target, phi=None, seed=0):
+        """Joint poses from here to tip `target` (arm frame, m) at tilt phi, or None (msg says why).
+
+        Lifts straight up to TRAVEL_MM above the board, crosses in joint space around the other
+        arms (straight if that's clear, else RRT-Connect), then comes straight down.
+        """
+        phi = self.phi_target if phi is None else phi
+        target = np.asarray(target, dtype=float)
+        floor = self.board_z + FLOOR_MARGIN
+        travel_z = self.board_z + TRAVEL_MM / 1000.0
+        if target[2] < floor:
+            self.msg = f"blocked: target z {target[2] * 1000:.0f} mm is below the board plane"
+            return None
+        obstacles = {}
+        if WORKCELL is not None:
+            with WORKCELL.lock():
+                obstacles, why = WORKCELL.obstacles()
+            if obstacles is None:
+                self.msg = f"blocked: {why}"
+                return None
+
+        # Samples are PLAN_SWEEP_MM of motion apart; clearing them by this much keeps the whole
+        # path SWEEP_MM / 2 clear, which is what each waypoint's claim checks again.
+        need = (PLAN_SWEEP_MM + collision.SWEEP_MM) / 2000.0
+
+        def clear(qs, z_min):
+            if any(self.pose(q)[0][2] < z_min for q in qs):
+                return False
+            if not obstacles:
+                return True
+            return WORKCELL.sample_margins([self.joints(q) for q in qs], obstacles)[0].min() >= need
+
+        def chord(x0, x1):
+            n = collision.sample_count(x1 - x0, PLAN_SWEEP_MM)
+            out = []
+            for k in range(n + 1):
+                q = self.q.copy()
+                q[ARM_IDX] = x0 + (x1 - x0) * k / n
+                out.append(q)
+            return out
+
+        goal, pos_err, phi_err = self.solve(target, phi, self.q)
+        if pos_err > POS_TOL_MM or phi_err > PHI_TOL_DEG:
+            self.msg = f"unreachable: target misses by {pos_err:.1f} mm / {phi_err:.1f} deg (joint limits)"
+            return None
+        up, down = [self.q], [goal]
+        if self.pose(self.q)[0][2] < travel_z:
+            up += self._vertical(self.q, travel_z, self.phi_target) or [None]
+        if target[2] < travel_z:
+            down = ([goal] + (self._vertical(goal, travel_z, phi) or [None]))[::-1]
+        if any(q is None for q in up + down):
+            self.msg = "unreachable: can't lift straight up at the start or the goal"
+            return None
+        if not clear(up, floor):
+            self.msg = "blocked: can't lift straight up here, the other arm is in the way"
+            return None
+        if not clear(down, floor):
+            self.msg = "blocked: the other arm is at the goal or right above it"
+            return None
+        a, b = up[-1][ARM_IDX], down[0][ARM_IDX]
+
+        def edge_ok(x0, x1):
+            return clear(chord(x0, x1), min(travel_z, self.pose(up[-1])[0][2], self.pose(down[0])[0][2]) - 1e-4)
+
+        middle = [a, b] if edge_ok(a, b) else collision.rrt_connect(
+            a, b, self.lo, self.hi, edge_ok, np.random.default_rng(seed))
+        if middle is None:
+            self.msg = "blocked: no path around the other arm found"
+            return None
+        middle = collision.shortcut(middle, edge_ok, np.random.default_rng(seed))
+        path = up + [q for x0, x1 in pairwise(middle) for q in chord(x0, x1)[1:]] + down[1:]
+        # Thin to waypoints at most PLAN_STEP_DEG apart. The arm moves straight in joint space
+        # between them, which isn't quite the path checked above, so check those chords too.
+        steps = [path[0]]
+        for prev, q in pairwise(path):
+            if np.max(np.abs(np.degrees(q[ARM_IDX] - steps[-1][ARM_IDX]))) > PLAN_STEP_DEG:
+                steps.append(prev)
+        steps.append(path[-1])
+        if not all(clear(chord(q0[ARM_IDX], q1[ARM_IDX]), floor) for q0, q1 in pairwise(steps)):
+            steps = path
+        self.msg = "ok"
+        return steps[1:]
 
     def state(self):
         tip, shaft, phi = self.pose(self.q)
@@ -410,6 +597,10 @@ class Sim:
             "tool": TOOL_HEADS[self.probe_idx],
             "tools": list(TOOL_HEADS),
             "msg": self.msg,
+            "workcell": None if WORKCELL is None else dict(
+                WORKCELL.status(self.joints()), arm=WORKCELL.me,
+                tip_world=(WORKCELL.models[WORKCELL.me].base @ np.r_[tip, 1.0])[:3].tolist()),
+            "goto": {"active": EXEC.active, "step": EXEC.step, "steps": EXEC.steps},
         }
 
 
@@ -458,6 +649,7 @@ class Hardware:
             near = min(range(len(slots)), key=lambda i: abs(delta(raw5, slots[i])))
             self.sim.probe_idx = near
             self.sim.q[TURRET_IDX] = math.radians(PROBE_ANGLES[near])
+        self.sim.announce()
 
     def reconnect(self):
         """The USB adapter dropped (a servo tool wrote to the bus, the board was power-cycled, a cable
@@ -531,6 +723,14 @@ class Hardware:
             self._goal(sid, self.bus.read_pos(sid))
         self.sim.msg = "stopped: holding current position"
 
+    def reached(self, tol_deg=2.0):
+        """True once every arm joint is within tol_deg of its goal (the sim pose)."""
+        for sid in JOINTS:
+            goal = self.rad_to_raw(sid, self.sim.q[CHAIN_INDEX[sid]])
+            if abs(delta(self.bus.read_pos(sid), goal)) * self._cal(sid)["deg_per_tick"] > tol_deg:
+                return False
+        return True
+
     def push(self):
         # Slow the servos down near the board so one command can't move fast there.
         far = self.sim.guard_height_mm() >= FAR_MM or self.sim.retreating
@@ -545,10 +745,109 @@ class Hardware:
             self._goal(PROBE_ID, self.probes[f"probe_{self.sim.probe_idx + 1}"])
 
 
-SIM = Sim()
+class Executor:
+    """Runs a goto plan in the background, one waypoint at a time. Every waypoint is claimed
+    against the other arms again first, so if one has moved into the way the arm stops."""
+
+    WAYPOINT_TIMEOUT_S = 5.0
+
+    def __init__(self):
+        self.active, self.step, self.steps, self.cancel = False, 0, 0, False
+
+    def start(self, steps, phi):
+        self.active, self.step, self.steps, self.cancel = True, 0, len(steps), False
+        threading.Thread(target=self._run, args=(steps, phi), daemon=True).start()
+
+    def _run(self, steps, phi):
+        try:
+            for i, q in enumerate(steps):
+                with LOCK:
+                    if self.cancel:
+                        SIM.msg = f"goto stopped at waypoint {i}/{len(steps)}"
+                        return
+                    if HW and not HW.armed:
+                        SIM.msg = f"goto stopped at waypoint {i}/{len(steps)}: disarmed"
+                        return
+                    if not SIM.claim(q):
+                        SIM.msg = f"goto stopped at waypoint {i}/{len(steps)}: {SIM.msg}"
+                        return
+                    SIM.q, self.step = q, i + 1
+                    if HW:
+                        HW.push()
+                deadline = time.monotonic() + self.WAYPOINT_TIMEOUT_S
+                while HW and not self.cancel:
+                    with LOCK:
+                        if HW.reached():
+                            break
+                    if time.monotonic() > deadline:
+                        with LOCK:
+                            HW.stop()
+                            SIM.msg = f"goto stopped: waypoint {i + 1} not reached in time"
+                        return
+                    time.sleep(0.03)
+                if not HW:
+                    time.sleep(SIM_STEP_S)
+            with LOCK:
+                SIM.phi_target, SIM.msg = phi, "ok"
+        except ConnectionError as e:
+            SIM.msg = f"goto stopped: arm write failed: {e}"
+        finally:
+            self.active = False
+
+
 HW = None
+WORKCELL = None
 SENSORS = None  # sensor_head.SensorHead with --sensors
+FEED_JPG = Path(tempfile.gettempdir()) / "troubleshooter_live_feed.jpg"  # written by live_pose.py
+FEED_STALE_S = 3.0
+EXEC = Executor()
+
+
+class TouchJob:
+    """Runs touch_pad.py for the viewer's pin picker: one job at a time, its output kept for the viewer.
+    Stop creates the STOP file touch_pad.py watches, so it aborts and retreats the same way as by hand."""
+
+    def __init__(self):
+        self.proc, self.target, self.mode, self.lines, self.msg = None, None, None, [], ""
+
+    def running(self):
+        return self.proc is not None and self.proc.poll() is None
+
+    def start(self, target, align_only):
+        pads = json.loads((ROOT / "pcb_geometry.json").read_text())["pads"]
+        if self.running():
+            self.msg = f"busy: still running {self.target}"
+        elif not HW or not HW.armed:
+            self.msg = "disarmed: press G to arm the real arm first"
+        elif not any(f"{p['ref']}.{p['pad']}" == target or p["net"] == target for p in pads):
+            self.msg = f"no pad or net called {target!r} on the board"
+        else:
+            (ROOT / "STOP").unlink(missing_ok=True)
+            cmd = [sys.executable, "-u", str(ROOT / "touch_pad.py"), "--target", target, "--tries", "12"]
+            self.proc = subprocess.Popen(cmd + (["--align-only"] if align_only else []), cwd=ROOT, text=True,
+                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=1)
+            self.target, self.mode, self.lines = target, "align only" if align_only else "touch", []
+            self.msg = f"started: {self.mode} {target}"
+            threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
+
+    def _read(self, proc):
+        for line in proc.stdout:
+            if "warn" not in line.lower():      # ikpy's fixed-link warnings
+                self.lines = (self.lines + [line.rstrip()])[-200:]
+
+    def stop(self):
+        if self.running():
+            (ROOT / "STOP").touch()
+            self.msg = f"stopping {self.target}: it aborts and retreats"
+
+    def status(self):
+        return {"running": self.running(), "target": self.target, "mode": self.mode, "msg": self.msg,
+                "returncode": None if self.proc is None else self.proc.poll(), "lines": self.lines[-60:]}
+
+
+TOUCH = TouchJob()
 LOCK = threading.Lock()
+SIM = Sim()
 ALLOWED_DIRS = ("viewer", "urdf")
 MOTION = ("/api/move", "/api/tilt", "/api/probe", "/api/reset", "/api/cmd")
 
@@ -557,6 +856,26 @@ def snapshot():
     s = SIM.state()
     s["hw"] = {"mode": "hardware" if HW else "sim", "armed": bool(HW and HW.armed)}
     return s
+
+
+def goto(body):
+    """Plan to body["tip"] ([x, y, z] m, arm frame, or world frame with "frame": "world") and
+    start moving. Returns at once; state["goto"] shows progress."""
+    tip = np.array(body.get("tip", []), dtype=float)
+    if tip.shape != (3,):
+        SIM.msg = "goto needs tip: [x, y, z] in meters"
+        return
+    if body.get("frame", "arm") == "world":
+        if WORKCELL is None:
+            SIM.msg = "goto: no workcell (start with --arm), so there is no world frame"
+            return
+        tip = (np.linalg.inv(WORKCELL.models[WORKCELL.me].base) @ np.r_[tip, 1.0])[:3]
+    phi = body.get("phi")
+    phi = SIM.phi_target if phi is None else float(phi)
+    steps = SIM.plan_to(tip, phi)
+    if steps is not None:
+        EXEC.start(steps, phi)
+        SIM.msg = f"moving: {len(steps)} waypoints"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -600,6 +919,8 @@ class Handler(BaseHTTPRequestHandler):
     def _get(self):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
+        if path == "/api/workcell":
+            return self._json(WORKCELL.snapshot() if WORKCELL else {"me": None, "arms": {}})
         if path == "/api/sensors":  # read-only; the sensor head has its own lock
             if SENSORS is None:
                 return self._json({"enabled": False, "error": "no sensor head: start with --sensors"})
@@ -607,6 +928,19 @@ class Handler(BaseHTTPRequestHandler):
                 probe = SIM.tof()
                 probe["tool"] = TOOL_HEADS[SIM.probe_idx]
             return self._json({"enabled": True, **SENSORS.snapshot(), "probe": probe})
+        if path == "/api/feed.jpg":  # live_pose.py's annotated camera frame, while a touch run is going
+            try:
+                age = time.time() - FEED_JPG.stat().st_mtime
+                data = FEED_JPG.read_bytes()
+            except OSError:
+                return self._send(404, b"no camera feed", "text/plain")
+            if age > FEED_STALE_S:
+                return self._send(404, b"camera feed stale", "text/plain")
+            return self._send(200, data, "image/jpeg")
+        if path == "/api/pads":  # the board's pads from the KiCad file, for the viewer's pin picker
+            return self._json(json.loads((ROOT / "pcb_geometry.json").read_text())["pads"])
+        if path == "/api/touch":
+            return self._json(TOUCH.status())
         if path == "/api/state":
             with LOCK:
                 if HW and not HW.armed:  # read-only mirror: the viewer follows the real arm
@@ -636,11 +970,24 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(n) or b"{}")
         path = urlparse(self.path).path
+        if path == "/api/touch":  # the job moves the arm through this server's own API, so no LOCK here
+            TOUCH.start(str(body.get("target", "")).strip(), bool(body.get("align_only")))
+            return self._json(TOUCH.status())
+        if path == "/api/touch/stop":
+            TOUCH.stop()
+            return self._json(TOUCH.status())
+        cmd = body.get("cmd") if path == "/api/cmd" else None
+        stopping = path == "/api/stop" or cmd == "stop"
+        if stopping:
+            EXEC.cancel = True  # before taking LOCK, so a running goto stops at its next waypoint
         with LOCK:
             if path in MOTION and HW and not HW.armed:
                 SIM.msg = "disarmed: press G to arm the real arm"
+            elif path in MOTION and EXEC.active and not stopping and cmd != "state":
+                SIM.msg = "busy: goto in progress (stop cancels it)"
             elif path == "/api/move":
-                SIM.move(body.get("d", [0, 0, 0]))
+                contact = body.get("contact_mm")
+                SIM.move(body.get("d", [0, 0, 0]), contact_mm=None if contact is None else float(contact))
             elif path == "/api/tilt":
                 SIM.tilt(int(body.get("step", 0)))
             elif path == "/api/probe":
@@ -650,14 +997,17 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/reset":
                 SIM.reset()
             elif path == "/api/cmd":
-                cmd = body.get("cmd")
                 if cmd == "jog":
                     hint = body.get("height_mm")
                     SIM.jog_camera(float(body.get("right_mm", 0)), float(body.get("up_mm", 0)),
                                    float(body.get("in_mm", 0)),
                                    None if hint is None else float(hint))
                 elif cmd == "touch_off":
-                    SIM.touch_off()
+                    tip_z, tof_mm = body.get("tip_z"), body.get("tof_mm")
+                    SIM.touch_off(None if tip_z is None else float(tip_z), None if tof_mm is None else float(tof_mm),
+                                  bool(body.get("zero_tof", True)))
+                elif cmd == "clear_touch_off":
+                    SIM.clear_touch_off()
                 elif cmd == "point_down":
                     SIM.point_down()
                 elif cmd == "tilt":
@@ -667,10 +1017,15 @@ class Handler(BaseHTTPRequestHandler):
                         SIM.msg = "no probe positions taught: ID 5 not moved (calibrate.py --probes-only 3)"
                     else:
                         SIM.select_tool(body.get("head"))
-                elif cmd == "stop" and HW:
-                    HW.stop()
+                elif cmd == "goto":
+                    goto(body)
+                elif cmd == "stop":
+                    if HW:
+                        HW.stop()
+                    else:
+                        SIM.msg = "stopped"
                 elif cmd != "state":
-                    SIM.msg = f"unknown command: {cmd!r} (jog, tilt, point_down, tool, stop, state)"
+                    SIM.msg = f"unknown command: {cmd!r} (jog, goto, tilt, point_down, touch_off, clear_touch_off, tool, stop, state)"
             elif path == "/api/arm" and HW:
                 try:
                     HW.arm(bool(body.get("on")))
@@ -698,6 +1053,8 @@ if __name__ == "__main__":
     ap.add_argument("--speed", type=int, default=300, help="servo speed limit, steps/s (4096 = one turn)")
     ap.add_argument("--accel", type=int, default=20, help="servo acceleration, 0-254")
     ap.add_argument("--port", type=int, default=PORT, help="HTTP port; give each arm its own")
+    ap.add_argument("--arm", help="this arm's name in the workcell file; turns on collision checks")
+    ap.add_argument("--workcell", default=str(collision.WORKCELL), help="shared bench layout")
     ap.add_argument("--sensors", metavar="PORT",
                     help="ESP32 sensor head (ToF + thermal) on this COM port, or 'auto'")
     ap.add_argument("--tof-offset-mm", type=float,
@@ -716,7 +1073,13 @@ if __name__ == "__main__":
     if args.floor_offset_mm:
         TABLE_Z -= args.floor_offset_mm / 1000.0
         SIM.board_z -= args.floor_offset_mm / 1000.0
+        SIM.board_z_default -= args.floor_offset_mm / 1000.0
         print(f"FLOORS LOWERED by {args.floor_offset_mm:.0f} mm (table z {TABLE_Z * 1000:.1f} mm, board z {SIM.board_z * 1000:.1f} mm)")
+    if args.arm:
+        WORKCELL = collision.Workcell(args.arm, args.workcell, PROBE_ANGLES)
+        if not args.hardware:
+            WORKCELL.settle_s = 0.0  # a simulated arm is always exactly at its goal
+        print(f"Workcell: arm {args.arm}, checking against {', '.join(WORKCELL.others) or 'nobody'}.")
     if args.hardware:
         HW = Hardware(SIM, args.hardware, args.baud, args.speed, args.accel)
         HW.sync()
@@ -724,6 +1087,7 @@ if __name__ == "__main__":
         if not HW.probes:
             print("No probe positions in calibration.json: ID 5 will not move.")
     else:
+        SIM.announce()
         print("Simulation only, no serial port.")
     print(f"Open http://localhost:{args.port}")
     ThreadingHTTPServer(("127.0.0.1", args.port), Handler).serve_forever()

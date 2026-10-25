@@ -11,6 +11,18 @@
   #msg.ok { color: #7fd48a; } #msg.bad { color: #ff8a80; }
   kbd { background: #2a2e36; border-radius: 3px; padding: 0 4px; }
   #keys { margin-top: 8px; color: #9aa1ad; }
+  #feed { position: fixed; right: 12px; bottom: 12px; width: min(480px, calc(100vw - 24px)); padding: 8px; background: rgba(20,22,26,.85); border: 1px solid #2c3038; border-radius: 6px; display: none; }
+  #feed img { display: block; width: 100%; border-radius: 3px; }
+  #feed .touch { color: #7fd48a; font-weight: bold; }
+  #pins { position: fixed; top: 12px; right: 12px; width: min(380px, calc(100vw - 24px)); padding: 10px 12px; background: rgba(20,22,26,.85); border: 1px solid #2c3038; border-radius: 6px; }
+  #pins h2 { margin: 0 0 6px; font-size: 13px; color: #8fb4ff; }
+  #pins input, #pins select { width: 100%; box-sizing: border-box; background: #1c1f25; color: #d7dae0; border: 1px solid #2c3038; border-radius: 4px; font: inherit; padding: 3px 6px; }
+  #pins select { margin-top: 6px; }
+  #pins button { margin: 6px 6px 0 0; background: #2a2e36; color: #d7dae0; border: 1px solid #3a3f48; border-radius: 4px; font: inherit; padding: 3px 10px; cursor: pointer; }
+  #pins button:hover { background: #343944; }
+  #pinstop { color: #ff8a80; }
+  #pinmsg { margin-top: 6px; color: #9aa1ad; }
+  #pinlog { margin: 6px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 11px; color: #c4c8d0; }
 </style>
 <script type="importmap">
 { "imports": {
@@ -21,18 +33,33 @@
 </script>
 </head>
 <body>
+<div id="pins">
+  <h2>Probe a pin</h2>
+  <input id="pinq" placeholder="search pad or net (J3.2, GND, SDA3)" autocomplete="off">
+  <select id="pinsel" size="8"></select>
+  <button id="pintouch">Touch</button><button id="pinalign">Align only</button><button id="pinstop">Stop</button>
+  <div id="pinmsg">pick a pad, then Touch</div>
+  <pre id="pinlog"></pre>
+</div>
+<div id="feed">
+  <div>wrist camera</div>
+  <img id="feedimg" alt="wrist camera feed with the board pose overlay">
+</div>
 <div id="hud">
   <h1 id="mode">Probe arm: simulation (no hardware)</h1>
   <div>tip (mm) <span id="tip">-</span></div>
   <div>mesh vs IK <span id="chk">-</span></div>
   <div>height above board <span id="hgt">-</span> mm <span id="cal" style="color:#9aa1ad"></span></div>
+  <div>ToF range <span id="tofmm">-</span> mm <span id="toftouch"></span></div>
   <div>probe tilt from vertical <span id="phi">-</span>&deg;</div>
   <div>probe slot <span id="probe">-</span></div>
+  <div id="wcrow" style="display:none">clearance to other arm <span id="wc">-</span></div>
   <div id="msg" class="ok">loading...</div>
   <div id="keys">
     <kbd>A</kbd><kbd>D</kbd> x &nbsp; <kbd>W</kbd><kbd>S</kbd> y &nbsp; <kbd>R</kbd><kbd>F</kbd> z<br>
     <kbd>Q</kbd><kbd>E</kbd> wrist tilt (tip stays put)<br>
     <kbd>Z</kbd><kbd>C</kbd> turn probe turret (ID 5 only) &nbsp; <kbd>Shift</kbd> coarse &nbsp; <kbd>0</kbd> reset<br>
+    <span id="wckeys" style="display:none"><kbd>B</kbd> show collision boxes<br></span>
     <span id="hwkeys" style="display:none"><kbd>G</kbd> arm / disarm real arm &nbsp; <kbd>Space</kbd> stop (hold position)<br></span>
     drag to orbit, scroll to zoom
   </div>
@@ -64,10 +91,14 @@ scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.1));
 const sun = new THREE.DirectionalLight(0xffffff, 1.4); sun.position.set(1, 2, 1.5); scene.add(sun);
 scene.add(new THREE.GridHelper(1, 20, 0x3a3f4a, 0x262a31));
 
-// URDF is Z-up, three.js is Y-up: everything robot-frame lives in this group.
+// URDF is Z-up, three.js is Y-up: the shared bench frame lives in `bench`. This arm's root frame
+// is `world` inside it, at this arm's base pose (identity when there's no workcell).
+const bench = new THREE.Group();
+bench.rotation.x = -Math.PI / 2;
+scene.add(bench);
 const world = new THREE.Group();
-world.rotation.x = -Math.PI / 2;
-scene.add(world);
+world.matrixAutoUpdate = false;
+bench.add(world);
 world.add(new THREE.AxesHelper(0.15)); // red X, green Y, blue Z in URDF frame
 
 const board = new THREE.Mesh(
@@ -90,7 +121,69 @@ world.add(downLine);
 let robot = null, tipLink = null, turretDeg = 0, hw = { mode: 'sim', armed: false };
 const loader = new URDFLoader();
 loader.packages = { debugger_arm: '/urdf' };
-loader.load('/urdf/debugger_arm.urdf', r => { robot = r; tipLink = r.links['probe_tip']; world.add(r); });
+loader.load('/urdf/debugger_arm.urdf', r => { robot = r; tipLink = r.links['probe_tip']; world.add(r); hangBoxes(); });
+
+// Workcell: the other arms, ghosted, each at its own base pose; their joints come from the server.
+let wc = null, showBoxes = false;
+const others = {}, boxMeshes = [];
+const ghost = new THREE.MeshStandardMaterial({ color: 0x8fb4ff, transparent: true, opacity: 0.45 });
+const boxMat = new THREE.MeshBasicMaterial({ color: 0xffb13b, wireframe: true });
+function fromRows(m) { return new THREE.Matrix4().set(...m.flat()); }
+function hangBoxes() {  // collision boxes ride on the URDF links they belong to
+  if (!wc) return;
+  const hang = (r, boxes) => {
+    if (!r || r.userData.boxes) return;
+    r.userData.boxes = true;
+    for (const b of boxes) {
+      const link = r.links[b.link];
+      if (!link) continue;
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(2 * b.half[0], 2 * b.half[1], 2 * b.half[2]), boxMat);
+      const a = b.axes, c = b.center;
+      mesh.matrixAutoUpdate = false;
+      mesh.matrix.set(a[0][0], a[0][1], a[0][2], c[0], a[1][0], a[1][1], a[1][2], c[1], a[2][0], a[2][1], a[2][2], c[2], 0, 0, 0, 1);
+      mesh.visible = showBoxes;
+      link.add(mesh);
+      boxMeshes.push(mesh);
+    }
+  };
+  hang(robot, wc.arms[wc.me].boxes);
+  for (const [name, o] of Object.entries(others)) hang(o.robot, wc.arms[name].boxes);
+}
+async function loadWorkcell() {
+  wc = await (await fetch('/api/workcell')).json();
+  if (!wc.me) return;
+  $('wcrow').style.display = 'block';
+  $('wckeys').style.display = 'inline';
+  $('mode').textContent += ', arm ' + wc.me;
+  world.matrix.copy(fromRows(wc.arms[wc.me].base));
+  for (const [name, arm] of Object.entries(wc.arms)) {
+    if (name === wc.me) continue;
+    const g = new THREE.Group();
+    g.matrixAutoUpdate = false;
+    g.matrix.copy(fromRows(arm.base));
+    bench.add(g);
+    others[name] = { group: g, robot: null };
+    const l = new URDFLoader();
+    l.packages = loader.packages;
+    l.load('/urdf/debugger_arm.urdf', r => {
+      others[name].robot = r;
+      g.add(r);
+      hangBoxes();
+    });
+  }
+  hangBoxes();
+  setInterval(pollOthers, 150);
+}
+async function pollOthers() {
+  const s = await (await fetch('/api/workcell')).json();
+  for (const [name, arm] of Object.entries(s.arms)) {
+    const r = others[name]?.robot;
+    if (r && arm.joints) for (const [j, v] of Object.entries(arm.joints)) r.joints[j]?.setJointValue(v);
+    // Meshes arrive after the robot loads; ghost any new ones (box overlays keep their material).
+    r?.traverse(o => { if (o.isMesh && o.material !== boxMat) o.material = ghost; });
+    if (others[name]) others[name].group.visible = !!arm.joints;
+  }
+}
 
 const $ = id => document.getElementById(id);
 let pending = [0, 0, 0], probeStep = 0, tiltStep = 0, reset = false, busy = false;
@@ -119,6 +212,12 @@ function apply(s) {
   $('hgt').textContent = s.height_mm.toFixed(1);
   $('cal').textContent = s.board_calibrated ? '(touched off)' : '(model estimate, -5 mm margin)';
   $('probe').textContent = s.probe + ' of ' + s.probe_count + ' (' + s.probe_deg.toFixed(0) + '°)';
+  if (s.workcell) {
+    const m = s.workcell.margin_mm, el = $('wc');
+    el.textContent = m === null ? s.workcell.nearest : (m >= 0 ? m.toFixed(0) + ' mm spare' : (-m).toFixed(0) + ' mm too close') + ' (' + s.workcell.nearest + ')';
+    el.style.color = m === null || m < 0 ? '#ff8a80' : m < 10 ? '#ffd23f' : '#7fd48a';
+    boxMat.color.set(m !== null && m < 10 ? 0xff5a5a : 0xffb13b);
+  }
   const m = $('msg'); m.textContent = s.msg + (s.note ? ' (' + s.note + ')' : ''); m.className = s.msg === 'ok' || s.msg === 'ready' ? 'ok' : 'bad';
 }
 async function pump() {
@@ -132,6 +231,7 @@ async function pump() {
   } finally { busy = false; }
 }
 addEventListener('keydown', e => {
+  if (e.target.closest && e.target.closest('#pins')) return;  // typing in the pin picker doesn't move the arm
   const k = e.key.toLowerCase();
   if (KEYMAP[k]) { const s = e.shiftKey ? COARSE : FINE; KEYMAP[k].forEach((v, i) => pending[i] += v * s); e.preventDefault(); }
   else if (k === 'q') { tiltStep -= 1; e.preventDefault(); }
@@ -139,14 +239,66 @@ addEventListener('keydown', e => {
   else if (k === 'z') probeStep -= e.repeat ? 0 : 1;
   else if (k === 'c') probeStep += e.repeat ? 0 : 1;
   else if (k === '0') reset = true;
+  else if (k === 'b' && wc?.me && !e.repeat) { showBoxes = !showBoxes; for (const m of boxMeshes) m.visible = showBoxes; }
   else if (k === 'g' && hw.mode === 'hardware' && !e.repeat) post('/api/arm', { on: !hw.armed }).then(apply);
   else if (k === ' ' && hw.mode === 'hardware') { post('/api/stop', {}).then(apply); e.preventDefault(); }
   pump();
 });
 setInterval(pump, 40);
-setInterval(() => { if (hw.mode === 'hardware' && !hw.armed && !busy) fetch('/api/state').then(r => r.json()).then(apply); }, 250);
+setInterval(() => {
+  if (!busy && ((hw.mode === 'hardware' && !hw.armed) || wc?.me)) fetch('/api/state').then(r => r.json()).then(apply);
+}, 250);
 
 fetch('/api/state').then(r => r.json()).then(apply);
+loadWorkcell();
+
+// Pin picker: any pad from the KiCad file; the server runs touch_pad.py for it and keeps its log.
+let pads = [];
+function renderPads() {
+  const q = $('pinq').value.trim().toLowerCase(), sel = $('pinsel'), keep = sel.value;
+  sel.innerHTML = '';
+  for (const p of pads) {
+    const id = `${p.ref}.${p.pad}`;
+    if (q && !id.toLowerCase().includes(q) && !p.net.toLowerCase().includes(q)) continue;
+    const o = document.createElement('option');
+    o.value = id; o.textContent = `${id.padEnd(7)} ${p.net}`;
+    sel.appendChild(o);
+  }
+  if (keep) sel.value = keep;
+}
+function showTouch(s) {
+  const state = s.running ? `running: ${s.mode} ${s.target}` : s.target ? `finished: ${s.mode} ${s.target}` : '';
+  $('pinmsg').textContent = [s.msg, state].filter(Boolean).join('  |  ') || 'pick a pad, then Touch';
+  const log = $('pinlog'), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+  log.textContent = (s.lines || []).join('\n');
+  if (atEnd) log.scrollTop = log.scrollHeight;
+}
+async function touchCall(path, body) {
+  try { showTouch(await (await fetch(path, { method: 'POST', body: JSON.stringify(body) })).json()); } catch {}
+}
+fetch('/api/pads').then(r => r.json()).then(p => { pads = p; renderPads(); }).catch(() => {});
+$('pinq').addEventListener('input', renderPads);
+$('pintouch').onclick = () => $('pinsel').value && touchCall('/api/touch', { target: $('pinsel').value, align_only: false });
+$('pinalign').onclick = () => $('pinsel').value && touchCall('/api/touch', { target: $('pinsel').value, align_only: true });
+$('pinstop').onclick = () => touchCall('/api/touch/stop', {});
+setInterval(() => fetch('/api/touch').then(r => r.json()).then(showTouch).catch(() => {}), 700);
+
+// Wrist camera feed from a touch run (live_pose.py), and the ToF that decides touching (at or under 66 mm, contact reads about 64).
+const TOF_TOUCH_MM = 66;
+const feedImg = $('feedimg');
+let feedBusy = false;
+feedImg.onload = () => { feedBusy = false; $('feed').style.display = 'block'; };
+feedImg.onerror = () => { feedBusy = false; $('feed').style.display = 'none'; };
+setInterval(() => { if (!feedBusy) { feedBusy = true; feedImg.src = '/api/feed.jpg?t=' + Date.now(); } }, 200);
+setInterval(async () => {
+  try {
+    const s = await (await fetch('/api/sensors')).json();
+    const t = s.enabled && s.tof;
+    $('tofmm').textContent = !s.enabled ? 'off (no --sensors)' : t && t.valid ? t.range_mm : t ? 'no target' : 'no sensor';
+    $('toftouch').textContent = t && t.valid && t.range_mm <= TOF_TOUCH_MM ? 'TOUCHING' : '';
+    $('toftouch').className = 'touch';
+  } catch {}
+}, 200);
 
 const tmp = new THREE.Vector3();
 function frame() {
@@ -157,6 +309,7 @@ function frame() {
   } else if (tipLink) {
     // Compare the loaded mesh tree's tip against the IK/FK tip; they should coincide.
     tipLink.getWorldPosition(tmp);
+    world.updateWorldMatrix(true, false);
     world.worldToLocal(tmp);
     const dmm = tmp.distanceTo(ikMarker.position) * 1000;
     $('chk').textContent = dmm.toFixed(2) + ' mm' + (dmm < 1 ? ' (match)' : ' (MISMATCH)');

@@ -1,0 +1,20 @@
+{
+  "_comment": "Copy to config/workcell.json. Base poses place each arm's URDF root frame in a shared world frame (meters, Z up, yaw about Z in degrees). Measure them with register_arms.py, don't guess. Probe sizes are mm; measure the real tool heads.",
+  "clearance_mm": 15,
+  "probe_clearance_mm": 4,
+  "settle_s": 1.5,
+  "arms": {
+    "A": {
+      "base_xyz_m": [0.0, 0.0, 0.0],
+      "base_yaw_deg": 0.0,
+      "urdf": "urdf/debugger_arm.urdf",
+      "probe": {"needle_mm": 15, "needle_radius_mm": 1.5, "head_mm": 55, "head_radius_mm": 7}
+    },
+    "B": {
+      "base_xyz_m": [-0.108, -0.40, 0.0],
+      "base_yaw_deg": 180.0,
+      "urdf": "urdf/debugger_arm.urdf",
+      "probe": {"needle_mm": 15, "needle_radius_mm": 1.5, "head_mm": 55, "head_radius_mm": 7}
+    }
+  }
+}

@@ -4,15 +4,20 @@ Needle position: needle_board = R^T (needle_cam - t) from the continuous feature
 (tip_offset_needle.json): x, y in board mm; -z = height above the board plane. The server's floor protects its model tip, not the
 needle, so the floor here is PnP's.
 
+  0. go to the start pose in --start (touch_start.json: the wrist camera sees the whole board), unless --from-here
   1. centre over the pad (burst + corrections)
-  2. one descent burst to ~12 mm above the board, re-centre
-  3. final: 0.5 mm steps (0.25 below 4 mm), re-centring when more than --recentre mm off, until the needle reaches --stop-h above the
-     board plane, or contact (command kept going, needle stopped, servo following error up > 1.5 mm)
+  2. one descent burst to --stage-h above the board, re-centre
+  3. final, straight down (z only, like the viewer's R/F keys), re-centring when more than --recentre mm off, until the joint
+     encoders put the tip --press mm below the board height from calibrate_board.py (board_cal.json). The ToF at the start
+     pose is a check only: more than --max-shift mm from calibration aborts (the board moved: re-calibrate). Steps are the distance left, clamped to 0.5-2 mm (smaller ones are lost in the servos' dead zone).
+     If the servos fall --blocked mm behind within 2 mm of the target, the board stopped the needle: that is a touch too.
+     The ToF is not used near the board: it sees beside the needle, and at J3.2 it jumped +-5 mm with no trend.
   4. hold --hold-s, save a frame, back off, retreat to ~25 mm.
-The servos dither by about +-1 mm on small moves (stiction), so centring accepts --tol (1.2 mm) after a few tries instead of aborting.
+The servos dither by about +-1 mm on small moves (stiction), so centring accepts --tol (0.9 mm) after a few tries instead of aborting.
 Aborts and retreats on: board lost, refused jog, a crash, the window closed (q), or a file called STOP next to this script.
 """
 import argparse
+import json
 import math
 import threading
 import time
@@ -27,12 +32,22 @@ HERE = Path(__file__).resolve().parent
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--target", default="J3.4")
-ap.add_argument("--tol", type=float, default=1.2, help="accept centring within this many mm (after at most --tries corrections)")
+ap.add_argument("--tol", type=float, default=0.9, help="accept centring within this many mm (after at most --tries corrections)")
 ap.add_argument("--tries", type=int, default=6)
 ap.add_argument("--recentre", type=float, default=1.0, help="in the final descent, re-centre when more than this far off (mm)")
-ap.add_argument("--stage-h", type=float, default=12.0, help="the descent burst stops this high above the board (mm)")
-ap.add_argument("--stop-h", type=float, default=0.8, help="stop when the needle is this high above the board plane (mm)")
+ap.add_argument("--stage-h", type=float, default=6.0, help="the descent burst stops this high above the board (mm)")
 ap.add_argument("--hold-s", type=float, default=3.0)
+ap.add_argument("--start", default=str(HERE / "touch_start.json"), help="start pose: tip_m and phi_deg, as the arm's state gives them")
+ap.add_argument("--align-only", action="store_true", help="centre over the pad, report, and stop there: no descent")
+ap.add_argument("--from-here", action="store_true", help="skip the start pose and start from wherever the arm is")
+BOARD_CAL = HERE / "board_cal.json"            # from calibrate_board.py
+ap.add_argument("--contact-depth", type=float, default=6.0,
+                help="the command may go this far below the board in the final descent; the servos lag it near the board (mm)")
+ap.add_argument("--press", type=float, default=0.5, help="go this far below the calibrated board height (mm)")
+ap.add_argument("--max-shift", type=float, default=5.0, help="abort if the start-pose ToF says the board moved more than this (mm)")
+ap.add_argument("--blocked", type=float, default=5.0, help="servos this far behind within 2 mm of the target = touching (mm)")
+ap.add_argument("--max-cmd", type=float, default=25.0, help="give up after this much final-descent command (mm)")
+ap.add_argument("--max-follow", type=float, default=8.0, help="abort if the servos lag the command by more than this (mm)")
 args = ap.parse_args()
 
 lp = LivePose(target=args.target)
@@ -74,6 +89,17 @@ def jog(r=0.0, u=0.0, i=0.0, wait=0.3):
     s = arm.jog(right=float(r), up=float(u), in_=float(i))
     if s.get("msg") != "ok":
         raise Abort(f"jog ({r:+.1f}, {u:+.1f}, {i:+.1f}) refused: {s.get('msg')}")
+    if s.get("note"):
+        say(f"   server: {s['note']}")
+    time.sleep(wait)
+
+
+def lower(mm, wait=0.8, contact_mm=None):
+    """Tip straight down (negative: up) by mm, tilt held: the viewer's R/F keys. Jogging "in" goes along the tilted probe,
+    which also moves the needle sideways, and near the board it stalled where straight down did not."""
+    s = arm.move_z(-float(mm), contact_mm=contact_mm)
+    if s.get("msg") != "ok":
+        raise Abort(f"move down {mm:+.1f} mm refused: {s.get('msg')}")
     if s.get("note"):
         say(f"   server: {s['note']}")
     time.sleep(wait)
@@ -133,11 +159,69 @@ def center(tol, tries):
     return m
 
 
+def tof_mm(n=25):
+    """Median of n fresh, valid ToF readings (mm), or None if fewer than half of them are valid."""
+    rs = []
+    for _ in range(n):
+        t = arm.sensors().get("tof")
+        if t and t["valid"] and t["age_s"] <= 0.5:
+            rs.append(t["range_mm"])
+        time.sleep(0.07)                        # the sensor gives a new range about every 33 ms
+    return float(np.median(rs)) if len(rs) * 2 > n else None
+
+
+def tip_z():
+    """The joint encoders' tip height (mm): where the arm really is, not where it was told to be."""
+    return arm.state(measure=True)["measured_tip"][2] * 1000.0
+
+
+def board_height():
+    """Board height (mm, arm frame) from board_cal.json, shifted by the ToF at the start pose."""
+    if not BOARD_CAL.exists():
+        raise Abort(f"no {BOARD_CAL.name}: run calibrate_board.py start, touch with R/F, then calibrate_board.py contact")
+    cal = json.loads(BOARD_CAL.read_text())
+    if "board_z_m" not in cal or "start" not in cal:
+        raise Abort(f"{BOARD_CAL.name} is incomplete: run calibrate_board.py start, then contact")
+    z = cal["board_z_m"] * 1000.0
+    if args.from_here:
+        say(f"board at z {z:.1f} mm (calibrated; no ToF check, since --from-here skips the start pose)")
+        arm.touch_off(tip_z=z / 1000.0, zero_tof=False)     # also after a server restart, which forgets it
+        return z
+    r = tof_mm()
+    if r is None:
+        raise Abort("no valid ToF reading at the start pose: start the server with --sensors and check the sensor head")
+    # A check only: the start pose isn't reached exactly (the servos lag and sag), so the ToF lands on a slightly different
+    # patch each time and reads a few mm differently (2026-10-25: 102 vs 105 with the board taped down). Shifting the board
+    # height by that would be worse than not shifting it.
+    shift = r - cal["start"]["tof_mm"]
+    if abs(shift) > args.max_shift:
+        raise Abort(f"the start-pose ToF reads {r:.1f} mm, {shift:+.1f} mm from calibration: the board moved, re-calibrate")
+    say(f"board at z {z:.1f} mm (calibrated; start-pose ToF {r:.1f} mm, {shift:+.1f} mm from calibration: within --max-shift)")
+    arm.touch_off(tip_z=z / 1000.0, zero_tof=False)     # the server's floor and model use it too
+    return z
+
+
 def follow(base=0.0):
     return arm.state(measure=True).get("follow_err_z_mm", 0.0) - base
 
 
+def go_to_start():
+    start = json.loads(Path(args.start).read_text())
+    say(f"0. going to the start pose ({args.start})")
+    for _ in range(3):                          # the servos lag, so a goto often ends 'not reached in time': re-plan from there
+        s = arm.goto(start["tip_m"], phi=start["phi_deg"], timeout=90.0)
+        if s.get("msg") == "ok" or "not reached in time" not in s.get("msg", ""):
+            break
+    if s.get("msg") != "ok":
+        if "not reached in time" not in s.get("msg", ""):
+            raise Abort(f"could not reach the start pose: {s.get('msg')}")
+        say(f"   {s['msg']}: carrying on, the arm is still catching up")
+    time.sleep(1.5)
+
+
 def run():
+    if not args.from_here:
+        go_to_start()
     m = look()
     if m is None:
         raise Abort("board not found at the start")
@@ -145,9 +229,16 @@ def run():
     say(f"start: needle at board ({tb[0]:.1f}, {tb[1]:.1f}) mm, {-tb[2]:.1f} mm above the board, fit {fit:.2f} px; pad "
         f"{lp.pad['ref']}.{lp.pad['pad']} [{lp.pad['net']}] at ({goal[0]:.1f}, {goal[1]:.1f}), {np.linalg.norm(goal - tb[:2]):.1f} mm away")
     base = float(np.mean([follow() for _ in range(5)]))
+    z_board = None if args.align_only else board_height()
 
     say("1. centre over the pad")
     m = center(args.tol, args.tries)
+    if args.align_only:
+        m = look(n=3) or m
+        off = goal - m[0][:2]
+        say(f"ALIGNED (--align-only): needle {np.linalg.norm(off):.2f} mm from the pad (dx {off[0]:+.2f}, dy {off[1]:+.2f}), "
+            f"{-m[0][2]:.1f} mm above the board; holding here")
+        return
 
     h = -m[0][2]
     down = h - args.stage_h
@@ -166,46 +257,44 @@ def run():
             raise Abort("the needle barely came down")
         m = center(args.tol, args.tries)
 
-    say("3. final descent")
-    cmd, hist, stalls, result = 0.0, [], 0, None
-    hist.append((0.0, -m[0][2]))
-    while cmd < 18.0:
+    target = z_board - args.press
+    say(f"3. final descent: straight down until the encoders put the tip at z {target:.1f} mm ({args.press:.1f} mm into the board)")
+    cmd, result = 0.0, None
+    while cmd < args.max_cmd:
         check_stop()
         m = look()
         if m is None:
             raise Abort("lost the board in the final descent")
         tb, fit = m
-        h = -tb[2]
         err = goal - tb[:2]
+        z = tip_z()
+        left = z - target
         gap = follow(base)
-        old = next((x for x in reversed(hist) if x[0] <= cmd - 1.5), None)
-        stalled = old is not None and (old[1] - h) < 0.35 * (cmd - old[0]) and gap > 1.5
-        say(f"   cmd {cmd:4.2f}  needle {h:5.2f} mm up  xy off {np.linalg.norm(err):.2f} mm  follow {gap:+.2f}  fit {fit:.2f}"
-            + ("  [STALLED]" if stalled else ""))
-        hist.append((cmd, h))
-        stalls = stalls + 1 if stalled else 0
-        if h <= args.stop_h:
-            result = "reached the board plane"
+        say(f"   cmd {cmd:5.2f}  tip z {z:6.1f} mm ({left:+.2f} to go)  PnP {-tb[2]:5.2f} mm up  xy off {np.linalg.norm(err):.2f} mm"
+            f"  follow {gap:+.2f}")
+        if left <= 0:
+            result = f"touching (encoders: tip at z {z:.1f} mm, the board is at {z_board:.1f})"
             break
-        if stalls >= 2:
-            result = "contact (the command kept going, the needle stopped)"
+        if left < 2.0 and gap > args.blocked:
+            result = f"touching (stopped {left:.1f} mm short of the target with the servos {gap:.1f} mm behind: the board)"
             break
+        if gap > args.max_follow:
+            raise Abort(f"the servos are {gap:.1f} mm behind the command: stopping before they catch up all at once")
         if np.linalg.norm(err) > args.recentre:
             level_burst(err)
-        step = 0.25 if h < 4.0 else 0.5
-        jog(i=step, wait=0.8)
+        step = float(np.clip(left, 0.5, 2.0))
+        lower(step, contact_mm=args.contact_depth)
         cmd += step
     if result is None:
-        raise Abort("went 18 mm of command without reaching the board or a contact")
+        raise Abort(f"went {args.max_cmd:.0f} mm of command without reaching the board height")
 
     m = look(n=3) or m
     tb, fit = m
     off = goal - tb[:2]
     say(f"{result.upper()}: needle at board ({tb[0]:.2f}, {tb[1]:.2f}) mm, {-tb[2]:.2f} mm above the plane; pad is "
         f"{np.linalg.norm(off):.2f} mm away (dx {off[0]:+.2f}, dy {off[1]:+.2f})")
-    import json
     json.dump({"target": f"{lp.pad['ref']}.{lp.pad['pad']}", "net": lp.pad["net"], "result": result,
-               "needle_board_mm": tb.tolist(), "off_pad_mm": off.tolist(), "off_pad_norm_mm": float(np.linalg.norm(off))},
+               "tip_z_mm": tip_z(), "board_z_mm": z_board, "needle_board_mm": tb.tolist(), "off_pad_mm": off.tolist(), "off_pad_norm_mm": float(np.linalg.norm(off))},
               open(HERE / "touch_pad_result.json", "w"), indent=1)
     say(f"holding the contact for {args.hold_s:.0f} s")
     time.sleep(args.hold_s)

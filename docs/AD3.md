@@ -62,9 +62,11 @@ Before every new setup:
    per arm:
 
    ```powershell
-   python sim_server.py --hardware COM10 --port 8765
-   python sim_server.py --hardware COM11 --port 8766
+   python sim_server.py --hardware COM10 --port 8765 --arm A
+   python sim_server.py --hardware COM11 --port 8766 --arm B
    ```
+
+   `--arm` turns on collision checks between the two arms; see [WORKCELL.md](WORKCELL.md).
 
 Optional: `TH_AD3_SERIAL` picks a device when several are connected, and `TH_CAPTURES_DIR`
 (default `data/captures`) holds one JSON file per capture with the raw samples.
@@ -128,7 +130,7 @@ firmware, wiring and host driver are in
 port, so the arm server owns it:
 
 ```powershell
-python sim_server.py --hardware COM10 --port 8765 --sensors COM5
+python sim_server.py --hardware COM10 --port 8765 --arm A --sensors COM5
 ```
 
 The arm server then uses the ToF as a second height estimate. The step governor, the floor

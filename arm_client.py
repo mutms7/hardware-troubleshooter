@@ -9,11 +9,14 @@ board along the probe). Each call is capped at 10 mm per axis; loop for bigger m
     arm.jog(up=-1, in_=0.5)
     arm.tilt(5)                 # tilt the probe 5 deg, tip stays put
     arm.select_tool("logic")    # turn the turret to a tool head: scope, logic or dmm
-    arm.stop()                  # hold position (real arm only)
+    arm.goto([-0.08, -0.18, -0.03])   # planned move around the other arm (needs --arm)
+    arm.move_z(-1)              # tip straight down 1 mm, tilt held
+    arm.stop()                  # hold position, cancel a goto
     arm.tof_height()            # tip height above the board from the ToF, mm, or None
     arm.sensors()               # ToF and the 8x8 thermal frame (needs --sensors)
 """
 import json
+import time
 import urllib.request
 
 
@@ -46,9 +49,33 @@ class Arm:
             body["height_mm"] = height_mm
         return self._post(body)
 
-    def touch_off(self):
-        """Call while the probe tip is touching the board: sets the board height from the tip."""
-        return self._post({"cmd": "touch_off"})
+    def move_z(self, dz_mm, contact_mm=None):
+        """Move the tip straight up (+) or down (-) by dz_mm, keeping the tilt the server holds
+        (set by the last goto that ended 'ok'). Shortened near the board and stopped at the
+        floor; state['tip'] says where the command ended up. contact_mm: a deliberate touch, the
+        command may go this far below the touched-off board (stop on state(measure=True))."""
+        body = {"d": [0, 0, dz_mm / 1000.0]}
+        if contact_mm is not None:
+            body["contact_mm"] = contact_mm
+        req = urllib.request.Request(f"{self.url}/api/move", data=json.dumps(body).encode(),
+                                     method="POST", headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.load(r)
+
+    def touch_off(self, tip_z=None, tof_mm=None, zero_tof=True):
+        """Call while the probe tip is touching the board: sets the board height from the tip
+        (or from tip_z, meters, e.g. the measured tip) and zeroes the ToF (or to tof_mm; or
+        not at all with zero_tof=False)."""
+        body = {"cmd": "touch_off", "zero_tof": zero_tof}
+        if tip_z is not None:
+            body["tip_z"] = tip_z
+        if tof_mm is not None:
+            body["tof_mm"] = tof_mm
+        return self._post(body)
+
+    def clear_touch_off(self):
+        """Forget the board height and ToF zeros from touch_off (back to the startup floors)."""
+        return self._post({"cmd": "clear_touch_off"})
 
     def tilt(self, deg):
         return self._post({"cmd": "tilt", "deg": deg})
@@ -70,6 +97,24 @@ class Arm:
             if not str(s.get("msg", "")).startswith("ok: tilt now"):
                 break
             time.sleep(settle_s)
+        return s
+
+    def goto(self, tip, phi=None, frame="arm", wait=True, timeout=60.0):
+        """Move the tip to [x, y, z] meters (this arm's frame, or the shared bench frame with
+        frame="world") along a path planned around the other arm: up, across, straight down.
+
+        Returns the final state. Check state['msg']: 'ok' when it arrived; 'blocked...' or
+        'unreachable...' if it never started; 'goto stopped...' if the other arm moved into the
+        way part-way (re-plan from where it stopped).
+        """
+        body = {"cmd": "goto", "tip": list(tip), "frame": frame}
+        if phi is not None:
+            body["phi"] = phi
+        s = self._post(body)
+        deadline = time.monotonic() + timeout
+        while wait and s["goto"]["active"] and time.monotonic() < deadline:
+            time.sleep(0.1)
+            s = self.state()
         return s
 
     def stop(self):

@@ -1,0 +1,162 @@
+{
+  "opencv_version": "4.14.0",
+  "square_inches": 1.9,
+  "square_m": 0.04826,
+  "squares": [
+    8,
+    8
+  ],
+  "inner_corners": [
+    7,
+    7
+  ],
+  "input_images": 12,
+  "accepted_images": 11,
+  "model": "plumb_bob, k3 fixed to zero",
+  "overall_rms_px": 0.5791672904923443,
+  "recomputed_rms_px": 0.5791669592803166,
+  "overall_mean_px": 0.5044433441600469,
+  "max_corner_error_px": 1.8673300302040345,
+  "camera_matrix": [
+    [
+      555.7053363083993,
+      0.0,
+      293.73843072922773
+    ],
+    [
+      0.0,
+      554.1730830355772,
+      227.91539988321784
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "distortion_coefficients": [
+    -0.5616564000590851,
+    0.35159121485193934,
+    -0.002183655932645978,
+    -0.006352501461826674,
+    0.0
+  ],
+  "images": [
+    {
+      "filename": "WIN_20261024_21_08_44_Pro.jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.5092288410343065,
+      "mean_px": 0.45592584084840176,
+      "max_px": 1.0516259231436285
+    },
+    {
+      "filename": "WIN_20261024_21_09_17_Pro.jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.4714273714619728,
+      "mean_px": 0.41389967073590905,
+      "max_px": 1.1942977278237357
+    },
+    {
+      "filename": "WIN_20261024_21_09_37_Pro.jpg",
+      "detected": false,
+      "width": 640,
+      "height": 480
+    },
+    {
+      "filename": "WIN_20261024_21_09_51_Pro.jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.5115128719240862,
+      "mean_px": 0.4578500040801172,
+      "max_px": 0.9756859372450826
+    },
+    {
+      "filename": "WIN_20261024_21_09_52_Pro.jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.4318209854671909,
+      "mean_px": 0.381056550143767,
+      "max_px": 0.8638627084285009
+    },
+    {
+      "filename": "WIN_20261024_21_09_54_Pro.jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.8008515770061108,
+      "mean_px": 0.6942554402504568,
+      "max_px": 1.8673300302040345
+    },
+    {
+      "filename": "WIN_20261024_21_09_58_Pro.jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.6915477537104592,
+      "mean_px": 0.6078923416005969,
+      "max_px": 1.3161453446450682
+    },
+    {
+      "filename": "WIN_20261024_21_09_59_Pro (2).jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.573197407306964,
+      "mean_px": 0.524153785078692,
+      "max_px": 1.0577063811947733
+    },
+    {
+      "filename": "WIN_20261024_21_09_59_Pro.jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.5252455531965187,
+      "mean_px": 0.46920636981239777,
+      "max_px": 1.0757056047706017
+    },
+    {
+      "filename": "WIN_20261024_21_10_05_Pro (2).jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.5787935005577727,
+      "mean_px": 0.5078400437837802,
+      "max_px": 1.1664622485847123
+    },
+    {
+      "filename": "WIN_20261024_21_10_05_Pro.jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.5302047114550731,
+      "mean_px": 0.47443495766154575,
+      "max_px": 1.1868134838850777
+    },
+    {
+      "filename": "WIN_20261024_21_10_07_Pro.jpg",
+      "detected": true,
+      "width": 640,
+      "height": 480,
+      "detection_method": "full-resolution SB",
+      "rms_px": 0.6480330376725716,
+      "mean_px": 0.5623617817648515,
+      "max_px": 1.483795439565262
+    }
+  ]
+}

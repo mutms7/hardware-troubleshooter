@@ -1,0 +1,18 @@
+{
+ "tip_m": [
+  -0.07107336663141456,
+  -0.09671115852259798,
+  0.007803627289983517
+ ],
+ "phi_deg": -14.233903792329599,
+ "joints": {
+  "revolute_1__1_": -0.08089192021450281,
+  "revolute_2__1_": 0.19660179546781437,
+  "revolute_3__1_": -0.22677008429623197,
+  "revolute_1": -1.3527256179890739,
+  "revolute_2": 2.0943951023931953
+ },
+ "tool": "dmm",
+ "saved": "2026-10-25",
+ "note": "touch_pad.py start pose: the wrist camera sees the whole controller board (PnP fit 0.35-0.6 px); needle about 42 mm above the board, 9 mm from J3.2"
+}
