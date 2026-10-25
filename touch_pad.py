@@ -246,15 +246,18 @@ def board_height():
         arm.touch_off(tip_z=z / 1000.0, zero_tof=False)     # also after a server restart, which forgets it
         return z
     r = tof_mm()
-    if r is None:
-        raise Abort("no valid ToF reading at the start pose: start the server with --sensors and check the sensor head")
     # A check only: the start pose isn't reached exactly (the servos lag and sag), so the ToF lands on a slightly different
     # patch each time and reads a few mm differently (2026-10-25: 102 vs 105 with the board taped down). Shifting the board
-    # height by that would be worse than not shifting it.
-    shift = r - cal["start"]["tof_mm"]
-    if abs(shift) > args.max_shift:
-        raise Abort(f"the start-pose ToF reads {r:.1f} mm, {shift:+.1f} mm from calibration: the board moved, re-calibrate")
-    say(f"board at z {z:.1f} mm (calibrated; start-pose ToF {r:.1f} mm, {shift:+.1f} mm from calibration: within --max-shift)")
+    # height by that would be worse than not shifting it. A warning, not an abort: sliding the board on the same table
+    # moves the ToF spot onto a different part (a chip, bare board, the table) without changing the board's height.
+    if r is None:
+        say("WARNING: no valid ToF reading at the start pose; using the calibrated board height")
+    else:
+        shift = r - cal["start"]["tof_mm"]
+        if abs(shift) > args.max_shift:
+            say(f"WARNING: the start-pose ToF reads {r:.1f} mm, {shift:+.1f} mm from calibration. Fine if the board only "
+                f"slid on the same surface; re-calibrate if its height changed")
+    say(f"board at z {z:.1f} mm (calibrated)")
     arm.touch_off(tip_z=z / 1000.0, zero_tof=False)     # the server's floor and model use it too
     return z
 
