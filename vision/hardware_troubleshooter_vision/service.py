@@ -9,7 +9,7 @@ nothing here moves an arm, and nothing here establishes electrical contact.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import cv2
@@ -27,6 +27,7 @@ from .board_features import BoardFeatureDetector
 from .capture import Frame, JointHistory, JointSample, tag_wrist_frame
 from .config import VisionConfig, load_vision_config
 from .homing import HomingResult, WristHoming
+from .locate import draw, encode_png, locate
 from .occlusion import arm_mask
 from .pads import Pad, pads_from_kicad, pads_from_specs
 from .rig import ArmRuntime, fixed_camera_extrinsic
@@ -48,6 +49,33 @@ class ArmAlignment:
     @property
     def ok(self) -> bool:
         return self.result.ok
+
+
+@dataclass
+class PadLocations:
+    """Pad predictions in one camera, plus what they were computed against."""
+
+    camera: str
+    stamp: float
+    registration_id: str = ""
+    reasons: list = field(default_factory=list)
+    pads: list = field(default_factory=list)
+    image_size: tuple | None = None
+    overlay_png: bytes | None = None
+
+    @property
+    def ok(self) -> bool:
+        return not self.reasons and bool(self.pads) and all(p.ok for p in self.pads)
+
+    def as_dict(self) -> dict:
+        return {
+            "camera": self.camera,
+            "stamp": self.stamp,
+            "registration_id": self.registration_id,
+            "reasons": list(self.reasons),
+            "image_size": list(self.image_size) if self.image_size else None,
+            "pads": [p.as_dict() for p in self.pads],
+        }
 
 
 class VisionService:
@@ -428,4 +456,72 @@ class VisionService:
         )
         if out.result.ok:
             out.correction_base_m = correction_in_base(out.result, base_from_board)
+        return out
+
+    def locate(
+        self,
+        names: list[str],
+        camera: str,
+        now: float,
+        sigma_board_m: float,
+        frame: Frame | None = None,
+    ) -> PadLocations:
+        """Predicted pixels of pads `names` in the fixed camera (`camera="fixed"`) or an arm's
+        wrist camera (`camera=<arm name>`), at `now` or at `frame.stamp` when a frame is
+        given. With a frame, the result also carries a PNG overlay drawn on it."""
+        stamp = frame.stamp if frame is not None else now
+        out = PadLocations(camera, stamp)
+        snapshot = self.engine.snapshot(stamp)
+        if snapshot.status != "valid" or not snapshot.has_pose:
+            out.reasons.append(f"registration_invalid:{snapshot.failure_reason}")
+            return out
+        out.registration_id = snapshot.registration_id
+        pads = {pad.name: pad for pad in self.pads}
+        if camera == "fixed":
+            model = self.fixed_camera
+            camera_from_board = transforms.transform(snapshot.rotation, snapshot.translation)
+            located = locate(
+                pads,
+                names,
+                model,
+                camera_from_board,
+                sigma_board_m,
+                snapshot.residual_px,
+                self.arms_mask(stamp),
+            )
+        else:
+            runtime = self.arms.get(camera)
+            if runtime is None:
+                out.reasons.append(f"unknown_camera:{camera}")
+                return out
+            if frame is not None:
+                tagged, reason = tag_wrist_frame(
+                    frame, camera, self.histories[camera], self.config.capture
+                )
+                sample = tagged.joints if tagged is not None else None
+            else:
+                sample = self.histories[camera].nearest(stamp)
+                skew = self.config.capture.max_joint_skew_s
+                reason = "no_joint_state" if sample is None else None
+                if sample is not None and (skew is None or abs(sample.stamp - stamp) > skew):
+                    sample, reason = None, "joint_state_stale"
+            if sample is None:
+                out.reasons.append(reason)
+                return out
+            base_from_board = self.base_from_board(camera, stamp)
+            if base_from_board is None:
+                out.reasons.append("registration_invalid")
+                return out
+            poses = runtime.link_poses(sample.positions)
+            model = runtime.wrist_camera
+            camera_from_board = (
+                transforms.invert(runtime.base_from_wrist_camera(poses)) @ base_from_board
+            )
+            # The registration residual is in fixed-camera pixels; only the board-frame
+            # uncertainty carries over to the wrist view.
+            located = locate(pads, names, model, camera_from_board, sigma_board_m)
+        out.pads = located
+        out.image_size = (model.width, model.height)
+        if frame is not None:
+            out.overlay_png = encode_png(draw(frame.image, located))
         return out

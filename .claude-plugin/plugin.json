@@ -1,0 +1,24 @@
+{
+  "name": "hardware-troubleshooter",
+  "description": "Bench debugging for PCBs and embedded firmware: a KiCad design index, safe probe-point selection, camera pad overlays, datasheet search (Moss), and AD3/arm measurement tools.",
+  "version": "0.3.0",
+  "author": {
+    "name": "PotatoPeaSea"
+  },
+  "repository": "https://github.com/mutms7/hardware-troubleshooter",
+  "keywords": ["pcb", "kicad", "embedded", "debugging", "oscilloscope", "mcp"],
+  "mcpServers": {
+    "hardware-troubleshooter": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "--extra",
+        "docs",
+        "python",
+        "run_mcp.py"
+      ]
+    }
+  }
+}

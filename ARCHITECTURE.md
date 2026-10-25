@@ -88,3 +88,13 @@ The wavegen, power supplies, and DIO outputs stay off. read_digital is not_imple
 
 A future voice client can transcribe speech, call the same MCP tools, and speak the
 reply. Audio-provider dependencies don't belong in the measurement executor.
+
+## Design knowledge
+
+The design tools ([docs/DESIGN_TOOLS.md](docs/DESIGN_TOOLS.md)) read KiCad files and
+datasheets in this process. They hold board-frame geometry straight from the PCB file,
+which is the same data vision loads, and rank probe pads by clearance. They still don't
+transform into camera or arm frames. `locate_on_image` asks the orchestrator, and vision
+does the projection. A pad ranking is not a registered target, and a predicted pixel
+is not a position check: `measure_voltage` still goes through the orchestrator's
+registry and stage checks.
