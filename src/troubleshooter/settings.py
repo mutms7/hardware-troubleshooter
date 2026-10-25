@@ -1,9 +1,16 @@
+import os
+from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .instruments.fake import FakeScenario
+
+
+def _local_data_dir() -> Path:
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("XDG_DATA_HOME")
+    return Path(base or Path.home() / ".local" / "share") / "hardware-troubleshooter"
 
 
 class Settings(BaseSettings):
@@ -41,6 +48,16 @@ class Settings(BaseSettings):
     captures_dir: str = "data/captures"
     # Multimeter knob tools (arm/bench run.py). Unset disables them.
     dmm_knob_config: str | None = None
+    # Design and datasheet stores. Kept off synced folders such as OneDrive by default,
+    # since a sync client can corrupt an SQLite file it copies mid-write.
+    design_dir: str = Field(default_factory=lambda: str(_local_data_dir()))
+    # Moss mirrors the datasheet index when both are set. Its own variable names work too.
+    moss_project_id: str | None = Field(
+        default=None, validation_alias=AliasChoices("TH_MOSS_PROJECT_ID", "MOSS_PROJECT_ID")
+    )
+    moss_project_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("TH_MOSS_PROJECT_KEY", "MOSS_PROJECT_KEY")
+    )
 
     @property
     def effective_outer_timeout(self) -> float | None:

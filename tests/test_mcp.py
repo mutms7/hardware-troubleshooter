@@ -14,10 +14,12 @@ ROOT = Path(__file__).parents[1]
 @asynccontextmanager
 async def connection(tmp_path, scenario="success", **settings):
     env = {key: value for key, value in os.environ.items() if not key.startswith("TH_")}
+    env = {k: v for k, v in env.items() if not k.startswith("MOSS_")}
     env.update(
         TH_BACKEND="stub",
         TH_STUB_SCENARIO=scenario,
         TH_JOURNAL=str(tmp_path / "operations.sqlite3"),
+        TH_DESIGN_DIR=str(tmp_path / "design"),
     )
     env.update({f"TH_{key.upper()}": str(value) for key, value in settings.items()})
     params = StdioServerParameters(
@@ -101,6 +103,18 @@ async def test_tool_contract_and_deduplication(tmp_path):
             "list_capture_profiles",
             "list_dmm_settings",
             "set_dmm_setting",
+            "read_tof",
+            "read_thermal",
+            "ingest_design",
+            "list_designs",
+            "set_active_design",
+            "query_design",
+            "find_probe_points",
+            "locate_on_image",
+            "ingest_datasheet",
+            "search_datasheets",
+            "list_documents",
+            "record_pinout",
         }
         assert tools["list_dmm_settings"].annotations.readOnlyHint is True
         assert tools["set_dmm_setting"].annotations.readOnlyHint is False
@@ -242,3 +256,8 @@ async def test_instrument_tools_through_actual_mcp(tmp_path):
         }
         bad = await call(client, "select_tool", arm="Z", head="scope")
         assert bad["failure_reason"] == "unknown_arm"
+        tof = await call(client, "read_tof", arm="A")
+        assert (tof["status"], tof["mode"]) == ("ok", "simulated")
+        assert tof["measurements"]["height_above_board_mm"] == 12.0
+        thermal = await call(client, "read_thermal", arm="A")
+        assert thermal["measurements"]["hottest_cell"] == [3, 4]

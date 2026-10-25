@@ -88,6 +88,8 @@ file for other signals.
 | `select_tool(arm, head)` | Turns one turret to `scope`, `logic`, or `dmm`. The arm itself doesn't move. |
 | `capture_waveform(arm, profile_id)` | Selects the scope head and captures its AD3 channel. Returns Vpp, min/max, mean, RMS, frequency, and duty cycle. |
 | `capture_logic(logic_type, lines)` | Selects the logic head on each arm in `lines` and captures their DIO pins, then decodes. |
+| `read_tof(arm)` | The arm's ToF range and, once zeroed, the probe tip's height above the board. No movement. See [Sensor head](#sensor-head). |
+| `read_thermal(arm)` | The arm's AMG8833 8x8 thermal grid in °C, with min/max/mean and the hottest cell. No movement. |
 
 `lines` maps each role of the logic type to an arm:
 
@@ -117,6 +119,45 @@ captured. Each arm's entry in `arms` reports `arm_server`: `hardware`, or `sim` 
 server runs without `--hardware`, in which case no turret actually turned.
 
 A flat waveform or `no_activity` can mean the probe isn't touching anything.
+
+## Sensor head
+
+An ESP32-S3 carries a VL53L0X time-of-flight sensor and an AMG8833 thermal camera. Its
+firmware, wiring and host driver are in
+[firmware/amg8833_usb](../firmware/amg8833_usb/README.md). Only one process can open its
+port, so the arm server owns it:
+
+```powershell
+python sim_server.py --hardware COM10 --port 8765 --sensors COM5
+```
+
+The arm server then uses the ToF as a second height estimate. The step governor, the floor
+stop, the turret clearance and the near-board servo speed all use the **lower** of the model
+height and the ToF height. A bad ToF reading can only make the arm more cautious, never
+less. The ToF height is used only when its reading is valid, less than 0.3 s old, and taken
+with the probe tilted no more than 30°. Its beam is assumed parallel to the probe:
+`height = (range - zero) * cos(tilt)`.
+
+**Zero it** with the tip touching the board: `touch_off` records the current range as that
+head's zero. Do this once per head if the heads have different lengths. Or give one zero for
+all heads with `--tof-offset-mm`. Until it's zeroed, the ToF reports a range but no height.
+
+`/api/state` has a `tof` block, and `height_source` says which estimate is in use.
+`/api/sensors` has both sensors plus the implied probe height. From scripts, use
+`Arm.tof_height()` and `Arm.sensors()` in `arm_client.py`.
+
+The ToF measures to whatever its beam hits. A tall part under the beam reads closer than
+the board, which only slows the arm. A beam that misses the board edge reads farther, and
+the model height then still limits the move. The ToF gives proximity, not contact.
+
+| Tool | `status=ok` | Otherwise |
+| --- | --- | --- |
+| `read_tof` | `measurements`: `range_mm`, `height_above_board_mm` (null with `height_note` until zeroed), `zero_mm`, `tool`, `model` | `inconclusive: no_target`; `failed: stale_reading`, `sensor_head_disconnected`, `no_reading`, `sensors_not_enabled`, `arm_unavailable`, `unknown_arm` |
+| `read_thermal` | `measurements`: `celsius` (8x8, row-major), `min_c`, `max_c`, `mean_c`, `hottest_cell` [row, col], `thermistor_c` | the same `failed` reasons |
+
+Thermal cells span the sensor's ~60° view, so a hot cell points at a part that runs hot. It
+isn't that part's temperature. `mode` is `live` from an arm server and `simulated` from the
+fake.
 
 ## Software simulator
 

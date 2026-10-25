@@ -1,7 +1,8 @@
 """Bench calibration: intrinsics, bench plane, hand-eye, joint zeros and tip pixels.
 
-All of it runs offline on captured views and writes YAML the runtime reads. A ChArUco
-target is used here only; the runtime has no fiducial dependency. Every function
+All of it runs offline on captured views and writes YAML the runtime reads. A plain
+checkerboard (or optional ChArUco target) is used only during calibration; the runtime
+has no fiducial dependency. Every function
 reports its residual, and none of them decides whether that residual is acceptable:
 record it, and set acceptance limits from measurements on the real rig.
 
@@ -41,6 +42,31 @@ CHARUCO_PIXEL_OFFSET = 0.5
 
 
 @dataclass(frozen=True)
+class CheckerboardTarget:
+    """Inner-corner counts, not square counts; measured square spacing in metres.
+
+    The target origin is the first inner corner, with +x along a row and +y
+    along a column. Keep that physical frame consistent for pose calibration.
+    """
+
+    corners_x: int
+    corners_y: int
+    square_m: float
+
+    def __post_init__(self):
+        for count in (self.corners_x, self.corners_y):
+            if isinstance(count, bool) or not isinstance(count, int) or count < 3:
+                raise ValueError("checkerboard needs at least 3 inner corners per axis")
+        if not math.isfinite(self.square_m) or self.square_m <= 0:
+            raise ValueError("square_m must be finite and positive")
+
+    def object_points(self) -> np.ndarray:
+        points = np.zeros((self.corners_x * self.corners_y, 3), dtype=float)
+        points[:, :2] = np.mgrid[: self.corners_x, : self.corners_y].T.reshape(-1, 2)
+        return points * self.square_m
+
+
+@dataclass(frozen=True)
 class CharucoTarget:
     squares_x: int
     squares_y: int
@@ -63,6 +89,55 @@ class Detection:
     ids: np.ndarray
     image_points: np.ndarray  # (N, 2) raw pixels
     object_points: np.ndarray  # (N, 3) target frame, metres
+    pose_order_verified: bool = True  # ChArUco IDs establish the target frame
+
+
+def detect_checkerboard(
+    gray: np.ndarray, target: CheckerboardTarget, *, reverse_order: bool | None = None
+) -> Detection | None:
+    """Detect a complete checkerboard, with sub-pixel corners in raw image pixels.
+
+    None leaves ordering unverified, suitable for intrinsics only. For poses, inspect
+    the returned corner order against the physical target's chosen origin and axes,
+    then pass False to confirm it or True to reverse it. A plain board cannot identify
+    its own origin. Reject views where reversal alone cannot establish the chosen axes
+    (particularly square grids); do not guess. This is a per-image decision.
+    """
+    if reverse_order is not None and not isinstance(reverse_order, bool):
+        raise ValueError("reverse_order must be None, False or True")
+    ok, corners = cv2.findChessboardCornersSB(
+        gray,
+        (target.corners_x, target.corners_y),
+        flags=cv2.CALIB_CB_NORMALIZE_IMAGE | cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY,
+    )
+    if not ok:
+        # A thin black outline can defeat the SB detector even with a white margin.
+        # The classic detector handles that pattern; refine its corners explicitly.
+        ok, corners = cv2.findChessboardCorners(
+            gray,
+            (target.corners_x, target.corners_y),
+            flags=cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE,
+        )
+        if ok:
+            corners = cv2.cornerSubPix(
+                gray,
+                corners,
+                (5, 5),
+                (-1, -1),
+                (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_MAX_ITER, 40, 0.001),
+            )
+    if not ok:
+        return None
+    points = corners.reshape(-1, 2).astype(float)
+    if reverse_order:
+        points = points[::-1].copy()
+    return Detection(
+        (gray.shape[1], gray.shape[0]),
+        np.arange(len(points)),  # positional indices, not physical marker IDs
+        points,
+        target.object_points(),
+        pose_order_verified=reverse_order is not None,
+    )
 
 
 def detect_charuco(gray: np.ndarray, target: CharucoTarget) -> Detection | None:
@@ -113,6 +188,8 @@ def camera_info(size, k, d) -> dict:
 
 def target_pose(detection: Detection, camera) -> tuple[np.ndarray, float]:
     """camera <- target and the RMS reprojection error in pixels."""
+    if not detection.pose_order_verified:
+        raise ValueError("checkerboard corner order must be verified before target_pose")
     ideal = camera.undistort_px(detection.image_points)
     ok, rvec, tvec = cv2.solvePnP(
         detection.object_points.astype(np.float64),

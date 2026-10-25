@@ -9,8 +9,10 @@ Start with [Simon's handoff](docs/SIMON_HANDOFF.md) and the
 [ARCHITECTURE.md](ARCHITECTURE.md) explains ownership and failure handling.
 [registration/](registration/README.md) holds the CV board registration library.
 [arm/](arm/README.md) builds each Maker Arm's URDF and SDK profile for the rotating toolhead.
-[vision/](vision/README.md) is the CV service: fixed-camera registration through arm
-occlusion, wrist-camera pad alignment, touchdown, scene guard, thermal, calibration.
+[vision/](vision/README.md) is the CV service: two-view wrist-camera homing,
+measured-motion triangulation, pad approach/alignment, RGB overview and calibration.
+The fixed depth-capable camera supplies RGB overview only in the default flow;
+neither its depth nor a fixed-camera PnP pose is required.
 
 ## What works here
 
@@ -20,13 +22,20 @@ occlusion, wrist-camera pad alignment, touchdown, scene guard, thermal, calibrat
 - Busy rejection, bounded cancellation, request IDs, and persistent execution uncertainty.
 - A software simulator that exercises the MCP flow without hardware.
 - Board-edge CV registration as a plain Python library, tested on synthetic frames.
-- The vision service and bench calibration, tested end to end on synthetic views.
+- Wrist-camera homing and pad alignment, tested end to end on synthetic views.
+- Intrinsics for one arm-mounted camera from 18 real checkerboard images; hand-eye,
+  tool offsets and physical accuracy limits remain rig-specific measurements.
 
 Jev, TypeSafe, RoboTwin, and Cartesia aren't active dependencies or execution paths.
 Voice can later be a separate client using these measurement tools.
 
 There is no real camera implementation, measurement orchestrator, or contact verifier
 here. The AD3 capture tools and tool-head selection are in [docs/AD3.md](docs/AD3.md).
+The KiCad design index, probe-point ranking, camera pad overlays, datasheet search (Moss),
+and the Claude Code plugin with its debugging skills are in
+[docs/DESIGN_TOOLS.md](docs/DESIGN_TOOLS.md).
+Install the plugin with
+`/plugin install hardware-troubleshooter --marketplace mutms7/hardware-troubleshooter`.
 Passing tests here doesn't prove a physical measurement.
 
 ## Run the software simulator
@@ -100,6 +109,8 @@ simulation returns 3.29 V with `mode=simulated`. It demonstrates the interface o
 | `select_tool(arm, head)` | Turns one arm's turret to the scope, logic, or multimeter head. |
 | `capture_waveform(arm, profile_id)` | Selects the scope head and captures its AD3 channel. |
 | `capture_logic(logic_type, lines)` | Selects logic heads and captures and decodes UART, PWM, I2C, or partial SPI. |
+| `read_tof(arm)` | Reads the arm's ToF: range, and the tip's height above the board once zeroed. |
+| `read_thermal(arm)` | Reads the arm's AMG8833 8x8 thermal grid in °C, with the hottest cell. |
 | `list_dmm_settings()` | Lists the multimeter knob settings, the last recorded one, and whether the arm runner is up. |
 | `set_dmm_setting(setting, current_setting?)` | Turns the multimeter's rotary switch with the bench arm and waits above the meter. |
 | `read_digital(group_id)` | Explicit `not_implemented` extension point. |

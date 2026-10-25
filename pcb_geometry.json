@@ -1,0 +1,485 @@
+{
+ "source": "Controller.kicad_pcb",
+ "units": "mm",
+ "origin": "board top-left corner, X right, Y down",
+ "width": 55.0,
+ "height": 74.0,
+ "pads": [
+  {
+   "ref": "U1",
+   "pad": "1",
+   "x": 20.64,
+   "y": 8.16,
+   "net": "+3.3V"
+  },
+  {
+   "ref": "U1",
+   "pad": "2",
+   "x": 20.64,
+   "y": 10.7,
+   "net": "+3.3V"
+  },
+  {
+   "ref": "U1",
+   "pad": "3",
+   "x": 20.64,
+   "y": 13.24,
+   "net": "unconnected-(U1-CHIP_PU-Pad3)"
+  },
+  {
+   "ref": "U1",
+   "pad": "4",
+   "x": 20.64,
+   "y": 15.78,
+   "net": "SDA1"
+  },
+  {
+   "ref": "U1",
+   "pad": "5",
+   "x": 20.64,
+   "y": 18.32,
+   "net": "SCL1"
+  },
+  {
+   "ref": "U1",
+   "pad": "6",
+   "x": 20.64,
+   "y": 20.86,
+   "net": "SDA2"
+  },
+  {
+   "ref": "U1",
+   "pad": "7",
+   "x": 20.64,
+   "y": 23.4,
+   "net": "SCL2"
+  },
+  {
+   "ref": "U1",
+   "pad": "8",
+   "x": 20.64,
+   "y": 25.94,
+   "net": "unconnected-(U1-GPIO15{slash}ADC2_CH4{slash}32K_P-Pad8)"
+  },
+  {
+   "ref": "U1",
+   "pad": "9",
+   "x": 20.64,
+   "y": 28.48,
+   "net": "unconnected-(U1-GPIO16{slash}ADC2_CH5{slash}32K_N-Pad9)"
+  },
+  {
+   "ref": "U1",
+   "pad": "10",
+   "x": 20.64,
+   "y": 31.02,
+   "net": "SCL6"
+  },
+  {
+   "ref": "U1",
+   "pad": "11",
+   "x": 20.64,
+   "y": 33.56,
+   "net": "SDA6"
+  },
+  {
+   "ref": "U1",
+   "pad": "12",
+   "x": 20.64,
+   "y": 36.1,
+   "net": "SDA3"
+  },
+  {
+   "ref": "U1",
+   "pad": "13",
+   "x": 20.64,
+   "y": 38.64,
+   "net": "unconnected-(U1-GPIO3{slash}ADC1_CH2-Pad13)"
+  },
+  {
+   "ref": "U1",
+   "pad": "14",
+   "x": 20.64,
+   "y": 41.18,
+   "net": "unconnected-(U1-GPIO46-Pad14)"
+  },
+  {
+   "ref": "U1",
+   "pad": "15",
+   "x": 20.64,
+   "y": 43.72,
+   "net": "SCL3"
+  },
+  {
+   "ref": "U1",
+   "pad": "16",
+   "x": 20.64,
+   "y": 46.26,
+   "net": "SDA4"
+  },
+  {
+   "ref": "U1",
+   "pad": "17",
+   "x": 20.64,
+   "y": 48.8,
+   "net": "SCL4"
+  },
+  {
+   "ref": "U1",
+   "pad": "18",
+   "x": 20.64,
+   "y": 51.34,
+   "net": "SDA5"
+  },
+  {
+   "ref": "U1",
+   "pad": "19",
+   "x": 20.64,
+   "y": 53.88,
+   "net": "SCL5"
+  },
+  {
+   "ref": "U1",
+   "pad": "20",
+   "x": 20.636,
+   "y": 56.417,
+   "net": "unconnected-(U1-GPIO14{slash}ADC2_CH3-Pad20)"
+  },
+  {
+   "ref": "U1",
+   "pad": "21",
+   "x": 20.636,
+   "y": 58.957,
+   "net": "unconnected-(U1-5V-Pad21)"
+  },
+  {
+   "ref": "U1",
+   "pad": "22",
+   "x": 20.636,
+   "y": 61.497,
+   "net": "GND"
+  },
+  {
+   "ref": "U1",
+   "pad": "23",
+   "x": 43.5,
+   "y": 61.5,
+   "net": "GND"
+  },
+  {
+   "ref": "U1",
+   "pad": "24",
+   "x": 43.5,
+   "y": 58.96,
+   "net": "GND"
+  },
+  {
+   "ref": "U1",
+   "pad": "25",
+   "x": 43.5,
+   "y": 56.42,
+   "net": "unconnected-(U1-GPIO19{slash}USB_D--Pad25)"
+  },
+  {
+   "ref": "U1",
+   "pad": "26",
+   "x": 43.5,
+   "y": 53.88,
+   "net": "unconnected-(U1-GPIO20{slash}USB_D+-Pad26)"
+  },
+  {
+   "ref": "U1",
+   "pad": "27",
+   "x": 43.5,
+   "y": 51.34,
+   "net": "unconnected-(U1-GPIO21-Pad27)"
+  },
+  {
+   "ref": "U1",
+   "pad": "28",
+   "x": 43.5,
+   "y": 48.8,
+   "net": "unconnected-(U1-GPIO47-Pad28)"
+  },
+  {
+   "ref": "U1",
+   "pad": "29",
+   "x": 43.5,
+   "y": 46.26,
+   "net": "unconnected-(U1-GPIO48-Pad29)"
+  },
+  {
+   "ref": "U1",
+   "pad": "30",
+   "x": 43.5,
+   "y": 43.72,
+   "net": "unconnected-(U1-GPIO45-Pad30)"
+  },
+  {
+   "ref": "U1",
+   "pad": "31",
+   "x": 43.5,
+   "y": 41.18,
+   "net": "unconnected-(U1-GPIO0-Pad31)"
+  },
+  {
+   "ref": "U1",
+   "pad": "32",
+   "x": 43.5,
+   "y": 38.64,
+   "net": "unconnected-(U1-GPIO35-Pad32)"
+  },
+  {
+   "ref": "U1",
+   "pad": "33",
+   "x": 43.5,
+   "y": 36.1,
+   "net": "unconnected-(U1-GPIO36-Pad33)"
+  },
+  {
+   "ref": "U1",
+   "pad": "34",
+   "x": 43.5,
+   "y": 33.56,
+   "net": "unconnected-(U1-GPIO37-Pad34)"
+  },
+  {
+   "ref": "U1",
+   "pad": "35",
+   "x": 43.5,
+   "y": 31.02,
+   "net": "unconnected-(U1-GPIO38-Pad35)"
+  },
+  {
+   "ref": "U1",
+   "pad": "36",
+   "x": 43.5,
+   "y": 28.48,
+   "net": "unconnected-(U1-GPIO39{slash}MTCK-Pad36)"
+  },
+  {
+   "ref": "U1",
+   "pad": "37",
+   "x": 43.5,
+   "y": 25.94,
+   "net": "unconnected-(U1-GPIO40{slash}MTDO-Pad37)"
+  },
+  {
+   "ref": "U1",
+   "pad": "38",
+   "x": 43.5,
+   "y": 23.4,
+   "net": "unconnected-(U1-GPIO41{slash}MTDI-Pad38)"
+  },
+  {
+   "ref": "U1",
+   "pad": "39",
+   "x": 43.5,
+   "y": 20.86,
+   "net": "unconnected-(U1-GPIO42{slash}MTMS-Pad39)"
+  },
+  {
+   "ref": "U1",
+   "pad": "40",
+   "x": 43.5,
+   "y": 18.32,
+   "net": "unconnected-(U1-GPIO2{slash}ADC1_CH1-Pad40)"
+  },
+  {
+   "ref": "U1",
+   "pad": "41",
+   "x": 43.5,
+   "y": 15.78,
+   "net": "unconnected-(U1-GPIO1{slash}ADC1_CH0-Pad41)"
+  },
+  {
+   "ref": "U1",
+   "pad": "42",
+   "x": 43.5,
+   "y": 13.24,
+   "net": "unconnected-(U1-GPIO44{slash}U0RXD-Pad42)"
+  },
+  {
+   "ref": "U1",
+   "pad": "43",
+   "x": 43.5,
+   "y": 10.7,
+   "net": "unconnected-(U1-GPIO43{slash}U0TXD-Pad43)"
+  },
+  {
+   "ref": "U1",
+   "pad": "44",
+   "x": 43.5,
+   "y": 8.16,
+   "net": "GND"
+  },
+  {
+   "ref": "J5",
+   "pad": "1",
+   "x": 3.5,
+   "y": 51.5,
+   "net": "+3.3V"
+  },
+  {
+   "ref": "J5",
+   "pad": "2",
+   "x": 6.04,
+   "y": 51.5,
+   "net": "GND"
+  },
+  {
+   "ref": "J5",
+   "pad": "3",
+   "x": 8.58,
+   "y": 51.5,
+   "net": "SCL5"
+  },
+  {
+   "ref": "J5",
+   "pad": "4",
+   "x": 11.12,
+   "y": 51.5,
+   "net": "SDA5"
+  },
+  {
+   "ref": "J2",
+   "pad": "1",
+   "x": 3.38,
+   "y": 25.5,
+   "net": "+3.3V"
+  },
+  {
+   "ref": "J2",
+   "pad": "2",
+   "x": 5.92,
+   "y": 25.5,
+   "net": "GND"
+  },
+  {
+   "ref": "J2",
+   "pad": "3",
+   "x": 8.46,
+   "y": 25.5,
+   "net": "SCL2"
+  },
+  {
+   "ref": "J2",
+   "pad": "4",
+   "x": 11.0,
+   "y": 25.5,
+   "net": "SDA2"
+  },
+  {
+   "ref": "J4",
+   "pad": "1",
+   "x": 3.38,
+   "y": 45.5,
+   "net": "+3.3V"
+  },
+  {
+   "ref": "J4",
+   "pad": "2",
+   "x": 5.92,
+   "y": 45.5,
+   "net": "GND"
+  },
+  {
+   "ref": "J4",
+   "pad": "3",
+   "x": 8.46,
+   "y": 45.5,
+   "net": "SCL4"
+  },
+  {
+   "ref": "J4",
+   "pad": "4",
+   "x": 11.0,
+   "y": 45.5,
+   "net": "SDA4"
+  },
+  {
+   "ref": "J1",
+   "pad": "1",
+   "x": 3.38,
+   "y": 19.0,
+   "net": "+3.3V"
+  },
+  {
+   "ref": "J1",
+   "pad": "2",
+   "x": 5.92,
+   "y": 19.0,
+   "net": "GND"
+  },
+  {
+   "ref": "J1",
+   "pad": "3",
+   "x": 8.46,
+   "y": 19.0,
+   "net": "SCL1"
+  },
+  {
+   "ref": "J1",
+   "pad": "4",
+   "x": 11.0,
+   "y": 19.0,
+   "net": "SDA1"
+  },
+  {
+   "ref": "J3",
+   "pad": "1",
+   "x": 3.38,
+   "y": 38.5,
+   "net": "+3.3V"
+  },
+  {
+   "ref": "J3",
+   "pad": "2",
+   "x": 5.92,
+   "y": 38.5,
+   "net": "GND"
+  },
+  {
+   "ref": "J3",
+   "pad": "3",
+   "x": 8.46,
+   "y": 38.5,
+   "net": "SCL3"
+  },
+  {
+   "ref": "J3",
+   "pad": "4",
+   "x": 11.0,
+   "y": 38.5,
+   "net": "SDA3"
+  },
+  {
+   "ref": "J6",
+   "pad": "1",
+   "x": 3.5,
+   "y": 32.0,
+   "net": "+3.3V"
+  },
+  {
+   "ref": "J6",
+   "pad": "2",
+   "x": 6.04,
+   "y": 32.0,
+   "net": "GND"
+  },
+  {
+   "ref": "J6",
+   "pad": "3",
+   "x": 8.58,
+   "y": 32.0,
+   "net": "SCL6"
+  },
+  {
+   "ref": "J6",
+   "pad": "4",
+   "x": 11.12,
+   "y": 32.0,
+   "net": "SDA6"
+  }
+ ]
+}

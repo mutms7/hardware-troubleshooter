@@ -186,5 +186,32 @@ class StubBackend:
             "note": "All hardware state is simulated. AD3 tools aren't implemented yet.",
         }
 
+    async def locate_points(self, pad_ids: list[str], camera: str) -> dict:
+        if not await self.available(0):
+            raise BackendUnavailable("Synthetic action server unavailable")
+        pads = [
+            {
+                "pad_id": pad_id,
+                "ok": True,
+                "reasons": [],
+                "center_px": [100.0 + 20 * i, 120.0],
+                "outline_px": None,
+                "sigma_px": 2.0,
+                "px_per_mm": 10.0,
+                "in_image": True,
+                "occluded_fraction": 0.0,
+            }
+            for i, pad_id in enumerate(pad_ids)
+        ]
+        return {
+            "status": "ok",
+            "mode": "simulated",
+            "camera": camera,
+            "registration_id": "synthetic-registration",
+            "image_size": [640, 480],
+            "pads": pads,
+            "note": "Synthetic pixels. No camera or registration was used.",
+        }
+
     async def close(self):
         pass

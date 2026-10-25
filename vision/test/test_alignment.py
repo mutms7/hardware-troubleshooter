@@ -179,3 +179,16 @@ def test_measured_pads():
     )
     assert [p.name for p in pads] == ["TP1", "TP2"]
     assert len(problems) == 3
+
+
+def test_untented_vias_are_named_by_file_order():
+    board = """(kicad_pcb (version 20240108)
+      (setup (tenting front back))
+      (via (at 1 1) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (net 1))
+      (via (at 2 1) (size 0.6) (drill 0.3) (layers "F.Cu" "B.Cu") (tenting none) (net 1))
+      (via (at 3 1) (size 0.6) (drill 0.3) (layers "In1.Cu" "B.Cu") (tenting none) (net 1)))
+    """
+    pads = {pad.name: pad for pad in pads_from_kicad(board)}
+    assert set(pads) == {"VIA2"}  # VIA1 is tented, VIA3 doesn't reach the top
+    assert pads["VIA2"].center == pytest.approx([0.002, -0.001])
+    assert np.ptp(pads["VIA2"].outline, axis=0) == pytest.approx([0.0006, 0.0006], abs=1e-6)

@@ -10,6 +10,8 @@ board along the probe). Each call is capped at 10 mm per axis; loop for bigger m
     arm.tilt(5)                 # tilt the probe 5 deg, tip stays put
     arm.select_tool("logic")    # turn the turret to a tool head: scope, logic or dmm
     arm.stop()                  # hold position (real arm only)
+    arm.tof_height()            # tip height above the board from the ToF, mm, or None
+    arm.sensors()               # ToF and the 8x8 thermal frame (needs --sensors)
 """
 import json
 import urllib.request
@@ -58,5 +60,30 @@ class Arm:
         """
         return self._post({"cmd": "tool", "head": head})
 
+    def point_down(self, settle_s=3.0, max_calls=8):
+        """Turn the probe to straight down (tilt 0) with the tip held in place. The server does it in safe increments
+        (a joint swings more than the tilt does); this repeats until it says 'ok' or it is blocked. Check state['msg']."""
+        import time
+        s = {}
+        for _ in range(max_calls):
+            s = self._post({"cmd": "point_down"})
+            if not str(s.get("msg", "")).startswith("ok: tilt now"):
+                break
+            time.sleep(settle_s)
+        return s
+
     def stop(self):
         return self._post({"cmd": "stop"})
+
+    def sensors(self):
+        """The sensor head: {"enabled", "tof", "thermal", "probe", ...}. thermal["celsius"] is
+        8x8 degrees C. probe["height_mm"] is the tip height the ToF implies; probe["why"] says
+        why it's None. enabled is False unless the server was started with --sensors."""
+        with urllib.request.urlopen(f"{self.url}/api/sensors", timeout=10) as r:
+            return json.load(r)
+
+    def tof_height(self):
+        """Tip height above the board from the ToF, in mm, or None (not zeroed, no target, stale,
+        tilted, or no sensor head). Zero it with touch_off while the tip touches the board."""
+        tof = self.state().get("tof")
+        return tof and tof["height_mm"]

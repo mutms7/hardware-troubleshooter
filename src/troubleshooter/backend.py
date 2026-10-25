@@ -22,6 +22,8 @@ class Backend(Protocol):
     def start(self, target: str, request_id: str, feedback: Feedback) -> GoalHandle: ...
     async def list_test_points(self) -> dict: ...
     async def get_rig_status(self) -> dict: ...
+    # Vision's predicted pixels for named pads; "overlay_png" (bytes) is optional.
+    async def locate_points(self, pad_ids: list[str], camera: str) -> dict: ...
     async def close(self) -> None: ...
 
 
@@ -39,6 +41,9 @@ class UnavailableBackend:
         raise BackendUnavailable(self.detail)
 
     async def get_rig_status(self) -> dict:
+        raise BackendUnavailable(self.detail)
+
+    async def locate_points(self, pad_ids: list[str], camera: str) -> dict:
         raise BackendUnavailable(self.detail)
 
     async def close(self) -> None:

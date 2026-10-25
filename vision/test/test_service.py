@@ -53,6 +53,7 @@ def write_rig(directory: Path) -> Path:
     (directory / "rig.yaml").write_text(yaml.safe_dump(SYNTHETIC_RIG), encoding="utf-8")
     (directory / "fixed.yaml").write_text(yaml.safe_dump(SYNTHETIC_CAMERA_INFO), encoding="utf-8")
     config = {
+        "registration_source": "fixed",  # legacy path remains opt-in
         "board_config": "board.yaml",
         "rig_config": "rig.yaml",
         "fixed_camera_info": "fixed.yaml",
@@ -177,4 +178,48 @@ def test_scene_guard_through_the_service(service):
 def test_example_config_refuses():
     service, problems = VisionService.load(str(ROOT / "vision/config/vision.example.yaml"), "x")
     assert service is None
-    assert "unconfigured:board_config" in problems and "unconfigured:pads.source" in problems
+    assert (
+        "unconfigured:board_reference.board_id" in problems
+        and "unconfigured:pads.source" in problems
+    )
+
+
+def test_locate_in_the_wrist_camera(service):
+    camera_from_board = place_arm_over_target(service)
+    frame = wrist_frame(service, camera_from_board)
+    out = service.locate([TARGET, "NOPE.1"], "left", 1.05, 1e-4, frame)
+    assert out.registration_id.endswith("/r1") and not out.reasons
+    target, unknown = out.pads
+    expected = project(service.arms["left"].wrist_camera, camera_from_board, TARGET_CENTER)
+    assert target.ok and target.center_px == pytest.approx(expected, abs=1e-6)
+    assert target.sigma_px == pytest.approx(0.1 * target.px_per_mm)
+    assert unknown.reasons == ["unknown_pad"]
+    assert not out.ok
+    assert out.overlay_png.startswith(b"\x89PNG")
+    assert out.as_dict()["pads"][0]["pad_id"] == TARGET
+
+
+def test_locate_in_the_fixed_camera(service):
+    from hardware_troubleshooter_registration.geometry import board_to_camera
+
+    out = service.locate([TARGET], "fixed", 1.0, 2e-4)
+    snapshot = service.board_state(1.0)
+    expected = service.fixed_camera.project(
+        board_to_camera(TARGET_CENTER[None], snapshot.rotation, snapshot.translation)
+    )[0]
+    (target,) = out.pads
+    assert target.ok, target.reasons
+    assert target.center_px == pytest.approx(expected, abs=1e-6)
+    assert target.sigma_px >= (snapshot.residual_px or 0.0)
+    assert target.occluded_fraction == 0.0  # the arm is parked away from the board
+    assert out.overlay_png is None  # no frame, no overlay
+
+
+def test_locate_refusals(service):
+    assert service.locate([TARGET], "fixed", 100.0, 1e-4).reasons[0].startswith(
+        "registration_invalid"
+    )
+    assert service.locate([TARGET], "right", 1.0, 1e-4).reasons == ["unknown_camera:right"]
+    assert service.locate([TARGET], "left", 50.0, 1e-4).reasons[0].startswith(
+        ("registration_invalid", "joint_state_stale")
+    )

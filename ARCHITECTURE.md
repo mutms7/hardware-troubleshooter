@@ -21,18 +21,24 @@ MCP validates input, dispatches goals, forwards stage feedback, handles outer ti
 and cancellation, checks the final evidence, and records request IDs. It never
 looks up coordinates, transforms frames, runs IK, chooses recovery movements, or reads AD3.
 
-The orchestrator owns precheck -> resolve -> plan -> approach -> position check ->
+The orchestrator owns precheck -> resolve -> wrist homing -> plan -> approach -> position check ->
 contact check -> acquire -> retract. It validates registration throughout the action,
 holds the probe during acquisition, serializes the whole bench, and owns stage
 deadlines and physical stopping. It must also reject concurrent goals from other
 clients. The MCP busy guard alone doesn't enforce bench-wide exclusivity.
 
-Simon owns CV. [registration/](registration/README.md) fits the board's edges in the
-fixed camera, with no AprilTag dependency, and keeps confirming it from the visible
-edges while an arm covers part of it. [vision/](vision/README.md) wraps that in one
-service for the orchestrator. It masks both arms from their URDF and joint state,
-aligns each tool over its target pad with the wrist cameras, detects touchdown from
-joint torque, guards the workspace, and holds the bench calibration.
+The [vision service](vision/README.md) defaults to wrist-camera homing for each pad:
+settled observation -> guarded lateral move -> settled observation -> joint board-pose
+fit and triangulation check. Measured joints and calibrated hand-eye geometry define
+camera movement; requested movement isn't a measured baseline. The resulting revision
+is scoped to that arm and target. Fresh wrist observations confirm it during alignment;
+movement, calibration changes and expiry require another homing stage.
+
+The fixed depth-capable camera supplies optional RGB overview only. No fixed-camera
+PnP, depth, bench-plane calibration or fixed-camera extrinsic is required in that
+path. An observed overview change can invalidate wrist homing, never establish a pose.
+[registration/](registration/README.md) remains the standalone legacy fixed-camera
+board-edge library, enabled in VisionService only with explicit registration_source=fixed.
 [arm/](arm/README.md) describes the Maker Arms with the rotating toolhead.
 The orchestrator still owns motion and IK; vision only measures and corrects.
 A valid camera overlay or alignment doesn't establish electrical contact.
@@ -82,3 +88,13 @@ The wavegen, power supplies, and DIO outputs stay off. read_digital is not_imple
 
 A future voice client can transcribe speech, call the same MCP tools, and speak the
 reply. Audio-provider dependencies don't belong in the measurement executor.
+
+## Design knowledge
+
+The design tools ([docs/DESIGN_TOOLS.md](docs/DESIGN_TOOLS.md)) read KiCad files and
+datasheets in this process. They hold board-frame geometry straight from the PCB file,
+which is the same data vision loads, and rank probe pads by clearance. They still don't
+transform into camera or arm frames. `locate_on_image` asks the orchestrator, and vision
+does the projection. A pad ranking is not a registered target, and a predicted pixel
+is not a position check: `measure_voltage` still goes through the orchestrator's
+registry and stage checks.
