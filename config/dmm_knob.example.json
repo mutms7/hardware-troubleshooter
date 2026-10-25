@@ -1,0 +1,9 @@
+{
+  "bench_dir": "../arm/bench/work",
+  "settings": {
+    "off": {"pose": "knob_closed", "description": "Meter off."},
+    "resistance": {"pose": "knob_resistance", "description": "Resistance (ohms)."},
+    "dc_voltage": {"pose": "knob_vdc", "description": "DC voltage."}
+  },
+  "move_timeout_s": 60
+}

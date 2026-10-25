@@ -111,13 +111,24 @@ simulation returns 3.29 V with `mode=simulated`. It demonstrates the interface o
 | `capture_logic(logic_type, lines)` | Selects logic heads and captures and decodes UART, PWM, I2C, or partial SPI. |
 | `read_tof(arm)` | Reads the arm's ToF: range, and the tip's height above the board once zeroed. |
 | `read_thermal(arm)` | Reads the arm's AMG8833 8x8 thermal grid in °C, with the hottest cell. |
+| `list_dmm_settings()` | Lists the multimeter knob settings, the last recorded one, and whether the arm runner is up. |
+| `set_dmm_setting(setting, current_setting?)` | Turns the multimeter's rotary switch with the bench arm and waits above the meter. |
 | `read_digital(group_id)` | Explicit `not_implemented` extension point. |
 
 The AD3 tools run the WaveForms SDK on this host and capture wherever the probe already
 is: they don't position it or verify contact. They need `TH_RIG_CONFIG`, and only
 `TH_INSTRUMENTS=fake` simulates them. See [docs/AD3.md](docs/AD3.md) for wiring,
 ground precautions, configuration, and outcomes. The multimeter head is a separate
-device that isn't driven yet.
+device the AD3 tools don't drive.
+
+The multimeter knob tools drive [arm/bench/run.py](arm/bench/README.md) through its work
+folder, so the runner must be running (torque on, arm parked at home or above the meter) on
+this host. They need `TH_DMM_KNOB_CONFIG` (see
+[config/dmm_knob.example.json](config/dmm_knob.example.json)), which maps setting names to
+taught knob poses. A turn starts from the last recorded setting unless the call passes
+`current_setting`. After a failure once the arm has moved, the knob position is recorded as
+unknown, so the next call needs `current_setting`. The display isn't read, so
+`setting_verified` is always false.
 
 Each measurement returns status, nullable reading, units, requested/resolved target,
 contact and stage checks, failure reason, request ID, mode, duration, and registration ID.

@@ -101,6 +101,8 @@ async def test_tool_contract_and_deduplication(tmp_path):
             "select_tool",
             "get_instrument_status",
             "list_capture_profiles",
+            "list_dmm_settings",
+            "set_dmm_setting",
             "read_tof",
             "read_thermal",
             "ingest_design",
@@ -114,6 +116,10 @@ async def test_tool_contract_and_deduplication(tmp_path):
             "list_documents",
             "record_pinout",
         }
+        assert tools["list_dmm_settings"].annotations.readOnlyHint is True
+        assert tools["set_dmm_setting"].annotations.readOnlyHint is False
+        unset = await call(client, "set_dmm_setting", setting="off")
+        assert unset["failure_reason"] == "configuration_required:dmm_knob"
         assert tools["measure_voltage"].annotations.readOnlyHint is False
         assert tools["list_test_points"].annotations.readOnlyHint is True
         assert "Jev" not in str(tools)
