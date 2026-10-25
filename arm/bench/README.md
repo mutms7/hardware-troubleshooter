@@ -81,7 +81,12 @@ the arm is.
 | `quit` | `home`, then release |
 
 Current points for the meter at its 2026-10-25 position: `knob_closed` (off), `knob_resistance`,
-`knob` (off, jaws open), `above` (camera pose and climb-out point), `jaw_open`, `jaw_closed`.
+`knob_vdc` (DC volts), `knob` (off, jaws open), `above` (camera pose and climb-out point),
+`jaw_open`, `jaw_closed`.
+
+An LLM can drive these turns through the MCP tools `list_dmm_settings` and `set_dmm_setting`
+(see the main [README](../../README.md)). They send `turn` to this runner and record the
+last setting in `work/dmm_setting.json`.
 For example, `turn knob_closed knob_resistance` switches to resistance and `turn knob_resistance knob_closed`
 switches back, about 10 s each.
 

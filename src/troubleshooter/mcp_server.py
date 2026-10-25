@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from .backend import BackendUnavailable, UnavailableBackend
 from .contracts import Mode
+from .instruments.dmm_knob import DmmKnob
 from .instruments.service import InstrumentService, Refused
 from .service import MeasurementService
 from .settings import Settings
@@ -28,7 +29,7 @@ never trigger a fallback to simulated evidence. Stop on uncertain motion, timeou
 abort, protocol_violation, or failed calibration. Never silently retry a movement.
 
 AD3 tools: each robot arm has a turret with a scope probe, a logic probe, and a multimeter
-probe (the multimeter is a separate device these tools don't drive). capture_waveform and
+probe (the multimeter is a separate device the AD3 tools don't drive). capture_waveform and
 capture_logic turn the turret to the needed head and read the AD3 input wired to it. They
 don't position the probe or verify contact: they capture wherever the probe already is, so
 contact_verified is always false. A flat line or no_activity can mean the probe isn't
@@ -37,6 +38,12 @@ profile or logic type by name, and cite capture IDs. Only status=ok carries meas
 Two-line protocols (I2C, SPI) use both arms' logic probes, one line each. SPI is partial:
 SCK plus one data line, no chip select, so its bytes are tentative.
 read_digital is a declared extension point and returns not_implemented.
+
+Multimeter knob: a bench arm turns the meter's rotary switch. Read list_dmm_settings first
+and choose a setting by name. set_dmm_setting turns from the last recorded setting unless you
+pass current_setting; pass it only when the operator has told you where the knob is. If a
+turn fails after the arm moved, the knob position is unknown: ask the operator before trying
+again. The display isn't read, so setting_verified is always false.
 No model selection service or voice provider runs inside this server.
 """
 
@@ -86,6 +93,7 @@ def build_backend(settings: Settings):
 class Services:
     measurement: MeasurementService
     instruments: InstrumentService
+    knob: DmmKnob
 
 
 def create_mcp(settings: Settings | None = None) -> FastMCP:
@@ -94,7 +102,9 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
     @asynccontextmanager
     async def lifespan(_):
         services = Services(
-            MeasurementService(settings, build_backend(settings)), InstrumentService(settings)
+            MeasurementService(settings, build_backend(settings)),
+            InstrumentService(settings),
+            DmmKnob(settings),
         )
         try:
             yield services
@@ -111,6 +121,9 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
 
     def instruments(ctx: Context) -> InstrumentService:
         return ctx.request_context.lifespan_context.instruments
+
+    def knob(ctx: Context) -> DmmKnob:
+        return ctx.request_context.lifespan_context.knob
 
     @mcp.tool(annotations=movement)
     async def measure_voltage(
@@ -201,6 +214,7 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
                 "capture_waveform",
                 "capture_logic",
                 "select_tool",
+                "set_dmm_setting",
             ],
             planned_tools=["read_digital"],
         )
@@ -281,6 +295,37 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
             result.failure_reason,
         )
         return result.model_dump(mode="json")
+
+    @mcp.tool(annotations=readonly)
+    def list_dmm_settings(ctx: Context) -> dict[str, Any]:
+        """List the multimeter knob settings the arm can turn to, and the last recorded one.
+
+        current_setting is the last setting commanded (or told by the operator), not a reading
+        of the knob; null means unknown. Also reports whether the arm runner is up. No movement.
+        """
+        return knob(ctx).status()
+
+    @mcp.tool(annotations=movement)
+    async def set_dmm_setting(
+        setting: str, ctx: Context, current_setting: str | None = None
+    ) -> dict[str, Any]:
+        """Turn the multimeter's rotary switch to a setting from list_dmm_settings.
+
+        The arm lifts above the meter, descends onto the knob, grips, twists, releases, and waits
+        above the meter. It turns from the last recorded setting; pass current_setting only when
+        the operator has said where the knob is. Refuses unless the arm runner is up and the arm
+        is parked. After a failure with moved=true the knob position is unknown. The display
+        isn't read: setting_verified is always false.
+        """
+        result = await knob(ctx).set_setting(setting, current_setting)
+        LOG.info(
+            "dmm_knob setting=%s from=%s status=%s reason=%s",
+            setting,
+            result.get("previous_setting"),
+            result["status"],
+            result["failure_reason"],
+        )
+        return result
 
     @mcp.tool(annotations=readonly)
     def read_digital(group_id: str) -> dict[str, Any]:

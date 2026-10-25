@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     fake_scenario: FakeScenario = "success"
     arm_timeout_s: float = Field(default=5.0, gt=0, le=30)
     captures_dir: str = "data/captures"
+    # Multimeter knob tools (arm/bench run.py). Unset disables them.
+    dmm_knob_config: str | None = None
 
     @property
     def effective_outer_timeout(self) -> float | None:
