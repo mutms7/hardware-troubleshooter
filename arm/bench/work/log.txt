@@ -67,3 +67,6 @@
 06:32:45.404 goto above: J1=-0.160 J2=-1.611 J3=+1.517 J4=-1.272 J5=+0.104 J6=-0.242 J7=-0.000
 06:32:46.629 goto home: J1=+0.000 J2=+0.000 J3=+0.000 J4=+0.000 J5=+0.000 J6=+0.000 J7=+0.000
 06:32:49.994 run: torque released (was ENABLED), exiting
+06:39:35.286 teach: connected, torque OFF - move the arm by hand
+06:40:58.233 recorded knob_vdc: J1=-0.340 J2=-1.370 J3=+0.985 J4=-0.826 J5=-0.053 J6=+0.962 J7=-0.218
+06:42:39.730 teach: saved C:\Users\sjin2\OneDrive\Documentos\Github\hardware-debugger\arm\bench\work\teach.yaml
