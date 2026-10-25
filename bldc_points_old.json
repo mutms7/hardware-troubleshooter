@@ -1,0 +1,31 @@
+{
+  "image": "bldc_reference.png",
+  "frame": {
+    "width": 1920,
+    "height": 1080
+  },
+  "note": "The three metal contacts of the black 3-pin connector on the motor cable, left to right. Pixel coordinates in the reference image.",
+  "points": [
+    {
+      "name": "A",
+      "px": [
+        872.4,
+        460.5
+      ]
+    },
+    {
+      "name": "B",
+      "px": [
+        885.0,
+        461.5
+      ]
+    },
+    {
+      "name": "C",
+      "px": [
+        899.2,
+        463.0
+      ]
+    }
+  ]
+}
