@@ -19,6 +19,8 @@ dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "ruff>=0.9,<1"]
 # Datasheet PDFs, and the Moss mirror of the search index (used when MOSS_PROJECT_ID and
 # MOSS_PROJECT_KEY are set). Moss is a pre-release under the PolyForm Shield licence.
 docs = ["pypdf>=5,<7", "inferedge-moss==1.0.0b19"]
+# read_dmm: camera capture and the 7-segment display reader.
+dmm = ["opencv-python-headless>=4.8,<5", "numpy"]
 
 [project.scripts]
 hardware-troubleshooter = "troubleshooter.cli:main"

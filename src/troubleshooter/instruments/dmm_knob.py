@@ -34,12 +34,38 @@ class Strict(BaseModel):
 class KnobSetting(Strict):
     pose: str  # full knob pose taught in arm/bench/work/teach.yaml, e.g. knob_resistance
     description: str = ""
+    # Display units this setting can show, e.g. ["V", "mV"]. A reading in one of them
+    # confirms the knob is on this setting; [] means the display goes blank (off).
+    units: list[str] | None = None
+
+
+class DisplayConfig(Strict):
+    layout: str  # dmm_display layout JSON; relative paths are from the knob config file
+    # Frames come from the camera (OpenCV index), or from a file another program keeps
+    # rewriting, e.g. a live viewer holding the camera (Windows allows one owner).
+    camera_index: int | None = Field(default=None, ge=0)
+    frame_file: str | None = None
+    width: int = Field(default=1920, gt=0)
+    height: int = Field(default=1080, gt=0)
+    frames: int = Field(default=5, ge=1, le=30)
+    min_agree: int = Field(default=3, ge=1, le=30)
+    frame_interval_s: float = Field(default=0.4, ge=0, le=5)  # the LCD updates ~3 times a second
+    max_frame_age_s: float = Field(default=2.0, gt=0, le=30)  # frame_file only
+
+    @model_validator(mode="after")
+    def check_source(self):
+        if (self.camera_index is None) == (self.frame_file is None):
+            raise ValueError("set exactly one of camera_index and frame_file")
+        if self.min_agree > self.frames:
+            raise ValueError("min_agree can't exceed frames")
+        return self
 
 
 class KnobConfig(Strict):
     bench_dir: str  # run.py's work folder; relative paths are from this config file
     settings: dict[str, KnobSetting] = Field(min_length=2)
     move_timeout_s: float = Field(default=60.0, gt=0, le=300)
+    display: DisplayConfig | None = None  # unset: read_dmm refuses
 
     @model_validator(mode="after")
     def check_names(self):
@@ -55,11 +81,19 @@ class Refused(Exception):
         self.reason, self.diagnostics, self.moved = reason, diagnostics, moved
 
 
+def _beside(config_file: Path, path: str) -> Path:
+    p = Path(path)
+    return (p if p.is_absolute() else config_file.parent / p).resolve()
+
+
 def load_knob(path: str | Path) -> tuple[KnobConfig, Path]:
     path = Path(path)
     config = KnobConfig.model_validate(json.loads(path.read_text(encoding="utf-8")))
-    bench = Path(config.bench_dir)
-    return config, (bench if bench.is_absolute() else path.parent / bench).resolve()
+    if config.display is not None:
+        config.display.layout = str(_beside(path, config.display.layout))
+        if config.display.frame_file:
+            config.display.frame_file = str(_beside(path, config.display.frame_file))
+    return config, _beside(path, config.bench_dir)
 
 
 def _near(q, target, tol) -> bool:
@@ -79,6 +113,8 @@ class DmmKnob:
             except (OSError, ValueError, ValidationError):
                 self.config_error = "configuration_invalid:dmm_knob"
         self.lock = asyncio.Lock()
+        self._reader = None  # dmm_display.Reader, built on first read (needs OpenCV)
+        self.captures_dir = Path(settings.captures_dir)
 
     # --- bench folder -------------------------------------------------------------------
 
@@ -270,3 +306,140 @@ class DmmKnob:
         self._send("hold")
         self._record(None, "timeout")
         raise Refused("timeout", moved=moved)
+
+    # --- display --------------------------------------------------------------------------
+
+    async def read_display(self) -> tuple[dict, bytes | None]:
+        """Read the meter's display through the wrist camera. Returns (result, LCD PNG)."""
+        started = time.monotonic()
+        reading_id = f"dmm-{time.strftime('%Y%m%d-%H%M%S')}-{os.urandom(3).hex()}"
+        result: dict = {"reading_id": reading_id, "status": "failed", "failure_reason": None}
+        png = None
+        try:
+            if self.config is None:
+                raise Refused(self.config_error)
+            if self.config.display is None:
+                raise Refused("configuration_required:dmm_display")
+            if self.lock.locked():
+                raise Refused("busy")
+            async with self.lock:
+                result, png = await asyncio.to_thread(self._read, reading_id)
+        except Refused as refused:
+            result["failure_reason"] = refused.reason
+            result["diagnostics"] = refused.diagnostics
+        result["duration_ms"] = int((time.monotonic() - started) * 1000)
+        return result, png
+
+    def _reader_for(self):
+        if self._reader is None:
+            try:
+                from .dmm_display import Reader, load_layout
+            except ImportError as exc:
+                raise Refused("opencv_unavailable", {"detail": str(exc)}) from exc
+            try:
+                layout, reference = load_layout(self.config.display.layout)
+                self._reader = Reader(layout, reference)
+            except ImportError as exc:
+                raise Refused("opencv_unavailable", {"detail": str(exc)}) from exc
+            except (OSError, ValueError, ValidationError) as exc:
+                raise Refused("configuration_invalid:dmm_display", {"detail": str(exc)}) from exc
+        return self._reader
+
+    def _frames(self) -> list:
+        import cv2
+
+        display = self.config.display
+        frames = []
+        if display.frame_file:
+            path, last = Path(display.frame_file), None
+            deadline = time.monotonic() + display.frames * max(display.frame_interval_s, 0.5) * 3
+            while len(frames) < display.frames and time.monotonic() < deadline:
+                try:
+                    mtime = path.stat().st_mtime
+                except FileNotFoundError as exc:
+                    raise Refused("frame_file_missing") from exc
+                if time.time() - mtime > display.max_frame_age_s:
+                    raise Refused("frame_file_stale", {"age_s": round(time.time() - mtime, 1)})
+                if mtime != last:  # only fresh frames count; the writer replaces the file
+                    image = cv2.imread(str(path))
+                    if image is not None:
+                        frames.append(image)
+                        last = mtime
+                time.sleep(0.05)
+            return frames
+        backend = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
+        camera = cv2.VideoCapture(display.camera_index, backend)
+        try:
+            if not camera.isOpened():
+                raise Refused("camera_unavailable", {"camera_index": display.camera_index})
+            camera.set(cv2.CAP_PROP_FRAME_WIDTH, display.width)
+            camera.set(cv2.CAP_PROP_FRAME_HEIGHT, display.height)
+            for _ in range(15):  # let auto exposure settle
+                camera.read()
+            for i in range(display.frames):
+                if i:
+                    time.sleep(display.frame_interval_s)
+                ok, image = camera.read()
+                if ok:
+                    frames.append(image)
+        finally:
+            camera.release()
+        return frames
+
+    def _read(self, reading_id: str) -> tuple[dict, bytes | None]:
+        import cv2
+
+        state = self._runner()
+        parked = self._parked(state)
+        if parked != "above":
+            raise Refused(
+                "arm_not_at_view_pose", {"arm_parked": parked, "target": state.get("target")}
+            )
+        reader = self._reader_for()
+        frames = self._frames()
+        if not frames:
+            raise Refused("no_frames")
+        voted = reader.vote([reader.read(f) for f in frames], self.config.display.min_agree)
+        canvas = voted.pop("canvas", None)
+        png = None
+        if canvas is not None:
+            ok, buf = cv2.imencode(".png", canvas)
+            png = buf.tobytes() if ok else None
+
+        recorded = self._recorded()["setting"]
+        expected = (
+            self.config.settings[recorded].units if recorded in self.config.settings else None
+        )
+        result = {"reading_id": reading_id, "knob_setting_recorded": recorded, **voted}
+        if voted["status"] == "ok":
+            unit = voted["unit"]
+            blank = voted["text"] == ""
+            if not blank and not voted["overload"] and unit is None:
+                result["status"], result["failure_reason"] = "inconclusive", "unit_unknown"
+            elif voted["value"] is not None and unit:
+                prefix = {"m": 1e-3, "u": 1e-6, "k": 1e3, "M": 1e6}.get(unit[0], 1.0)
+                result["value_base"] = voted["value"] * (prefix if len(unit) > 1 else 1.0)
+                result["unit_base"] = unit[1:] if len(unit) > 1 and unit[0] in "mukM" else unit
+            if expected is None:
+                result["setting_check"] = "unknown"
+            elif (blank and expected == []) or (unit in expected):
+                result["setting_check"] = "consistent"
+            else:
+                result["setting_check"] = "mismatch"
+                result["note"] = (
+                    f"The display doesn't match the recorded knob setting {recorded!r} "
+                    f"(expects {expected or 'a blank display'}); the knob may be elsewhere."
+                )
+        result["image_file"] = self._save_reading(reading_id, result, png)
+        return result, png
+
+    def _save_reading(self, reading_id: str, result: dict, png: bytes | None) -> str | None:
+        try:
+            self.captures_dir.mkdir(parents=True, exist_ok=True)
+            if png:
+                (self.captures_dir / f"{reading_id}.png").write_bytes(png)
+            path = self.captures_dir / f"{reading_id}.json"
+            path.write_text(json.dumps(result, default=str), encoding="utf-8")
+            return str((self.captures_dir / f"{reading_id}.png").resolve()) if png else None
+        except OSError:
+            return None

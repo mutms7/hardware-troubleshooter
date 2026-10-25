@@ -58,7 +58,9 @@ Multimeter knob: a bench arm turns the meter's rotary switch. Read list_dmm_sett
 and choose a setting by name. set_dmm_setting turns from the last recorded setting unless you
 pass current_setting; pass it only when the operator has told you where the knob is. If a
 turn fails after the arm moved, the knob position is unknown: ask the operator before trying
-again. The display isn't read, so setting_verified is always false.
+again. set_dmm_setting can't see the knob, so setting_verified is always false; read_dmm
+reads the display afterwards, and its setting_check says whether the unit fits the setting.
+Only status=ok from read_dmm is a reading; if decimal_inferred is true, say so when citing it.
 No model selection service or voice provider runs inside this server.
 """
 
@@ -373,6 +375,33 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
             result["failure_reason"],
         )
         return result
+
+    @mcp.tool(annotations=readonly)
+    async def read_dmm(ctx: Context) -> list[Any]:
+        """Read the multimeter's display through the bench arm's wrist camera. No movement.
+
+        Needs the arm parked above the meter (where set_dmm_setting leaves it). Several frames
+        are decoded locally (7-segment) and only a reading most frames agree on is status=ok.
+        Returns value and unit as shown, value_base in V or ohms, text, overload ("OL"),
+        decimal_inferred (glare hid the decimal point and the unit's fixed range placed it),
+        and setting_check: whether the unit fits the recorded knob setting. Also returns the
+        straightened LCD image so you can check the digits yourself.
+        """
+        import json
+
+        result, png = await knob(ctx).read_display()
+        LOG.info(
+            "dmm_read %s status=%s reason=%s text=%r unit=%s",
+            result.get("reading_id"),
+            result["status"],
+            result["failure_reason"],
+            result.get("text"),
+            result.get("unit"),
+        )
+        out: list[Any] = [json.dumps(result, default=str)]
+        if png:
+            out.append(Image(data=png, format="png"))
+        return out
 
     @mcp.tool(annotations=readonly)
     def read_digital(group_id: str) -> dict[str, Any]:

@@ -134,3 +134,6 @@
 07:23:43.980 jog J7 +0.020 -> -0.1295
 07:24:11.563 FAULT (holding what it can, goto disabled): control loop exception: The message could not be sent
 07:26:47.092 run: torque released (was FAULT), exiting
+08:16:12.756 run: connected. envelope J1[-1.403,+0.811], J2[-2.026,+0.013], J3[-0.019,+2.018], J4[-1.739,+0.194], J5[-0.896,+0.382], J6[-0.249,+1.315], J7[-0.972,+0.012] (commands may exceed it by <= 0.06 rad of sag correction on J1-J6)
+08:16:12.864 run: ENABLED, holding current pose
+08:16:13.843 goto above: J1=-0.160 J2=-1.611 J3=+1.517 J4=-1.272 J5=+0.104 J6=-0.242 J7=-0.000

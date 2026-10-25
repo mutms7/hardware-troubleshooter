@@ -1,9 +1,22 @@
 {
   "bench_dir": "../arm/bench/work",
   "settings": {
-    "off": {"pose": "knob_closed", "description": "Meter off."},
-    "resistance": {"pose": "knob_resistance", "description": "Resistance (ohms)."},
-    "dc_voltage": {"pose": "knob_vdc", "description": "DC voltage."}
+    "off": {"pose": "knob_closed", "description": "Meter off.", "units": []},
+    "resistance": {
+      "pose": "knob_resistance",
+      "description": "Resistance (ohms).",
+      "units": ["Ω", "kΩ", "MΩ"]
+    },
+    "dc_voltage": {"pose": "knob_vdc", "description": "DC voltage.", "units": ["V", "mV"]}
   },
-  "move_timeout_s": 60
+  "move_timeout_s": 60,
+  "display": {
+    "layout": "../arm/bench/display/dm6000ar.json",
+    "camera_index": 1,
+    "width": 1920,
+    "height": 1080,
+    "frames": 5,
+    "min_agree": 3,
+    "frame_interval_s": 0.4
+  }
 }
