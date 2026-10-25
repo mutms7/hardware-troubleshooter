@@ -1,0 +1,9 @@
+# Install the Maker Arm SDK first, without its deps (motorbridge-smart-servo is only for
+# Star-leader teleop), at the commit vendored in ../vendor/maker_arm:
+#   pip install --no-deps "maker-arm @ git+https://github.com/makermods-robotics/maker-arm-sdk@b30d05a23d72e8c155a8e00f807aba8e8c705f68"
+pyyaml
+pyserial
+python-can
+gs_usb
+pyusb
+libusb-package

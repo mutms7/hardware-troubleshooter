@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     fake_scenario: FakeScenario = "success"
     arm_timeout_s: float = Field(default=5.0, gt=0, le=30)
     captures_dir: str = "data/captures"
+    # Multimeter knob tools (arm/bench run.py). Unset disables them.
+    dmm_knob_config: str | None = None
     # Design and datasheet stores. Kept off synced folders such as OneDrive by default,
     # since a sync client can corrupt an SQLite file it copies mid-write.
     design_dir: str = Field(default_factory=lambda: str(_local_data_dir()))

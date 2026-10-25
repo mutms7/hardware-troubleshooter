@@ -1,0 +1,4 @@
+# Runtime scratch written by teach.py / run.py. work/teach.yaml (taught points), state.json
+# (last live pose) and log.txt (move log) are tracked.
+work/cmd/
+work/state.json.tmp
