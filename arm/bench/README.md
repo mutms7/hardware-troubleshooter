@@ -109,5 +109,7 @@ switches back, about 10 s each.
   overcurrent and the e-stop was used. Taught poses only hold if the meter stays put.
 - After a power cycle J6 can read one full turn off (6.25 instead of −0.03). The SDK takes
   that turn back out on connect while the reading is within 0.35 rad of the soft limits.
-- The home-route fix (open-air vs at-the-meter decided by the arm pose, not the point's name)
-  has passed sim_check.py but hasn't run on the arm yet.
+
+Last full run on the arm (2026-10-25): home → `turn knob_closed knob_resistance` (12.9 s)
+→ `turn knob_resistance knob_closed` (9.6 s) → `home` from `above` (5.8 s) → `release`,
+with no guard trips or faults.
