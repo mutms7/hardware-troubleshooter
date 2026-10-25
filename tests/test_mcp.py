@@ -103,6 +103,7 @@ async def test_tool_contract_and_deduplication(tmp_path):
             "list_capture_profiles",
             "list_dmm_settings",
             "set_dmm_setting",
+            "read_dmm",
             "read_tof",
             "read_thermal",
             "ingest_design",

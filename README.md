@@ -113,6 +113,7 @@ simulation returns 3.29 V with `mode=simulated`. It demonstrates the interface o
 | `read_thermal(arm)` | Reads the arm's AMG8833 8x8 thermal grid in °C, with the hottest cell. |
 | `list_dmm_settings()` | Lists the multimeter knob settings, the last recorded one, and whether the arm runner is up. |
 | `set_dmm_setting(setting, current_setting?)` | Turns the multimeter's rotary switch with the bench arm and waits above the meter. |
+| `read_dmm()` | Reads the multimeter's display through the wrist camera: value, unit, and the LCD image. |
 | `read_digital(group_id)` | Explicit `not_implemented` extension point. |
 
 The AD3 tools run the WaveForms SDK on this host and capture wherever the probe already
@@ -127,8 +128,18 @@ this host. They need `TH_DMM_KNOB_CONFIG` (see
 [config/dmm_knob.example.json](config/dmm_knob.example.json)), which maps setting names to
 taught knob poses. A turn starts from the last recorded setting unless the call passes
 `current_setting`. After a failure once the arm has moved, the knob position is recorded as
-unknown, so the next call needs `current_setting`. The display isn't read, so
+unknown, so the next call needs `current_setting`. A turn can't see the knob, so
 `setting_verified` is always false.
+
+`read_dmm` needs the config's `display` section and the `dmm` extra (OpenCV). With the arm
+parked above the meter, it decodes the 7-segment LCD locally in several frames, using the
+calibrated layout in [arm/bench/display/](arm/bench/display/dm6000ar.json). Only a reading
+most frames agree on is `status=ok`; a wandering value is `inconclusive: unstable_reading`.
+Glare is never read as an unlit segment: a digit decodes only if every possibility agrees,
+and a decimal point hidden by glare is placed from the unit's fixed range
+(`decimal_inferred`). `setting_check` compares the unit with the recorded knob setting.
+Frames come from the camera, or from a file a live viewer keeps rewriting (`frame_file`),
+since Windows lets only one program hold the camera.
 
 Each measurement returns status, nullable reading, units, requested/resolved target,
 contact and stage checks, failure reason, request ID, mode, duration, and registration ID.
