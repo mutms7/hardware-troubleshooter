@@ -50,5 +50,17 @@ class Arm:
     def tilt(self, deg):
         return self._post({"cmd": "tilt", "deg": deg})
 
+    def point_down(self, settle_s=3.0, max_calls=8):
+        """Turn the probe to straight down (tilt 0) with the tip held in place. The server does it in safe increments
+        (a joint swings more than the tilt does); this repeats until it says 'ok' or it is blocked. Check state['msg']."""
+        import time
+        s = {}
+        for _ in range(max_calls):
+            s = self._post({"cmd": "point_down"})
+            if not str(s.get("msg", "")).startswith("ok: tilt now"):
+                break
+            time.sleep(settle_s)
+        return s
+
     def stop(self):
         return self._post({"cmd": "stop"})

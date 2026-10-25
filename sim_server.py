@@ -56,6 +56,8 @@ POS_TOL_MM = 1.5           # reject an IK result that misses the target by more 
 PHI_TOL_DEG = 1.5          # ...or that misses the requested tilt by more than this
 MAX_JOINT_STEP_DEG = 15.0  # reject a single move that swings any joint further than this
 TILT_STEP_DEG = 5.0
+W_TILT = 3.0               # IK cost: mm of tip error one degree of tilt error is worth (straight down wins)
+REG = 0.01                 # IK cost per degree of joint movement: prefer the solution nearest the current joints (tiny: only breaks ties)
 MAX_JOG_MM = 10.0          # largest single jog command per axis; Jev loops for bigger moves
 # How the wrist camera is rolled about its optical axis. 0 = image-up points away from the base.
 # If a "right" jog moves the probe left in the image, try 180; if it moves up/down, try +/-90.
@@ -106,14 +108,35 @@ class Sim:
         phi = math.degrees(math.atan2(shaft @ radial, shaft @ DOWN))
         return tip, shaft, phi
 
+    def lateral_deg(self, q):
+        """How far the shaft leans sideways out of the arm's vertical plane (should be ~0 for this 4-joint arm)."""
+        q = q.copy()
+        q[TURRET_IDX] = 0.0
+        fr = self.chain.forward_kinematics(q, full_kinematics=True)
+        tip, shaft, pan = fr[LINK_TIP][:3, 3], fr[LINK_ROLL][:3, 2], fr[LINK_PAN][:3, 3]
+        radial = tip - pan
+        radial[2] = 0.0
+        n = np.linalg.norm(radial)
+        if n < 1e-6:
+            return 0.0
+        side = np.array([radial[1], -radial[0], 0.0]) / n          # horizontal, perpendicular to the radial direction
+        return math.degrees(math.asin(float(np.clip(shaft @ side, -1.0, 1.0))))
+
     def solve(self, target, phi_target, q_start):
+        """Joint angles that put the tip at `target` with the shaft at tilt `phi_target` (0 = straight down).
+
+        Cost, per unit: 1 per mm of tip error, W_TILT per degree of tilt error and of sideways lean (so pointing straight
+        down wins over a small position miss when the pose is at a joint limit), and REG per degree of joint movement
+        (among equal solutions take the one nearest the current joints, which stops branch flips and big swings)."""
+        x0 = np.clip(q_start[ARM_IDX], self.lo, self.hi)
+
         def residual(x):
             q = q_start.copy()
             q[ARM_IDX] = x
             tip, _, phi = self.pose(q)
-            return np.r_[(tip - target) * 1000.0, 0.5 * (phi - phi_target)]
+            return np.r_[(tip - target) * 1000.0, W_TILT * (phi - phi_target), W_TILT * self.lateral_deg(q),
+                         REG * np.degrees(x - x0)]
 
-        x0 = np.clip(q_start[ARM_IDX], self.lo, self.hi)
         r = least_squares(residual, x0, bounds=(self.lo, self.hi))
         q = q_start.copy()
         q[ARM_IDX] = r.x
@@ -242,6 +265,36 @@ class Sim:
     def tilt(self, step):
         tip, _, _ = self.pose(self.q)
         self._try(tip, self.phi_target + step * TILT_STEP_DEG, "tilt")
+
+    def point_down(self, max_step_deg=3.0, max_swing_deg=2 * MAX_JOINT_STEP_DEG - 2.0):
+        """Turn the probe to straight down (tilt 0) with the tip held where it is.
+
+        Solved in small tilt steps (each a short joint move). Holding the tip while the tilt changes swings the elbow and
+        wrist by more than the tilt itself, so one call applies as far as stays under `max_swing_deg` of joint travel; if
+        that is not all the way, msg says 'ok: tilt now X deg' and the call is simply repeated (Arm.point_down does this).
+        Nothing is applied if even the first step is blocked by a joint limit."""
+        tip, _, phi = self.pose(self.q)
+        q, ph = self.q.copy(), phi
+        n = max(1, int(math.ceil(abs(ph) / max_step_deg)))
+        best = None
+        for k in range(1, n + 1):
+            want = ph * (1 - k / n)
+            q, pos_err, phi_err = self.solve(tip, want, q)
+            if pos_err > POS_TOL_MM or phi_err > PHI_TOL_DEG:
+                if best is None:
+                    self.msg = (f"point down: can't tilt toward straight down with the tip here ({pos_err:.1f} mm / "
+                                f"{phi_err:.1f} deg off: a joint limit). Move the tip, then try again")
+                    return False
+                break
+            if max(abs(math.degrees(q[i] - self.q[i])) for i in ARM_IDX) > max_swing_deg:
+                break
+            best = (q.copy(), want)
+        if best is None:
+            self.msg = "point down: even the first step would swing a joint too far; not applied"
+            return False
+        self.q, self.phi_target = best
+        self.msg = "ok" if abs(best[1]) < 0.05 else f"ok: tilt now {best[1]:.1f} deg, call point_down again"
+        return True
 
     def probe(self, step):
         new = self.probe_idx + step
@@ -380,6 +433,13 @@ class Hardware:
         self._speed_now = self.speed
         self.armed = True
 
+    def release(self):
+        """Torque OFF on every joint so the arm can be moved by hand. It will sag or fall unless it is supported."""
+        self.armed = False
+        for sid in self._ids():
+            self.bus.torque(sid, False)
+        self.sim.msg = "torque OFF: the arm is limp. Support it. Press G / POST /api/arm to hold again."
+
     def stop(self):
         for sid in self._ids():
             self._goal(sid, self.bus.read_pos(sid))
@@ -504,6 +564,8 @@ class Handler(BaseHTTPRequestHandler):
                                    None if hint is None else float(hint))
                 elif cmd == "touch_off":
                     SIM.touch_off()
+                elif cmd == "point_down":
+                    SIM.point_down()
                 elif cmd == "tilt":
                     SIM.tilt(float(body.get("deg", 0)) / TILT_STEP_DEG)
                 elif cmd == "stop" and HW:
@@ -518,7 +580,9 @@ class Handler(BaseHTTPRequestHandler):
                     SIM.msg = f"could not arm: {e}"
             elif path == "/api/stop" and HW:
                 HW.stop()
-            elif path not in ("/api/arm", "/api/stop"):
+            elif path == "/api/release" and HW:
+                HW.release()
+            elif path not in ("/api/arm", "/api/stop", "/api/release"):
                 return self._send(404, b"not found", "text/plain")
             if HW and HW.armed and path in MOTION and SIM.msg in ("ok", "ready"):
                 try:
@@ -534,7 +598,15 @@ if __name__ == "__main__":
     ap.add_argument("--baud", type=int, default=1_000_000)
     ap.add_argument("--speed", type=int, default=300, help="servo speed limit, steps/s (4096 = one turn)")
     ap.add_argument("--accel", type=int, default=20, help="servo acceleration, 0-254")
+    ap.add_argument("--floor-offset-mm", type=float, default=0.0,
+                    help="lower the table and board floors by this much. For finding the real needle's contact height when the "
+                         "model's table height is stale or the needle sits above the model's tip. Contact is then found by "
+                         "following error / PnP, not by the floor: use only with slow steps and the arm watched.")
     args = ap.parse_args()
+    if args.floor_offset_mm:
+        TABLE_Z -= args.floor_offset_mm / 1000.0
+        SIM.board_z -= args.floor_offset_mm / 1000.0
+        print(f"FLOORS LOWERED by {args.floor_offset_mm:.0f} mm (table z {TABLE_Z * 1000:.1f} mm, board z {SIM.board_z * 1000:.1f} mm)")
     if args.hardware:
         HW = Hardware(SIM, args.hardware, args.baud, args.speed, args.accel)
         HW.sync()
