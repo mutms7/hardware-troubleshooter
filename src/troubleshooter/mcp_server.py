@@ -39,6 +39,12 @@ Two-line protocols (I2C, SPI) use both arms' logic probes, one line each. SPI is
 SCK plus one data line, no chip select, so its bytes are tentative.
 read_digital is a declared extension point and returns not_implemented.
 
+Sensor head tools read an arm's ESP32 sensor head and never move anything. read_tof gives the
+time-of-flight range and, once zeroed, the probe tip's height above whatever the beam hits
+(the board, or a tall part under it). It's a proximity reading, not contact evidence.
+read_thermal gives an 8x8 grid in degrees C across a ~60 degree field of view: each cell
+averages a wide area, so it shows what runs hot, never a pad or junction temperature.
+
 Design tools work without the rig. ingest_design reads a KiCad board (and the schematics
 beside it) into a local store; query_design and find_probe_points answer from that store
 exactly. find_probe_points ranks exposed copper on a net and refuses pads where the tip could
@@ -219,6 +225,8 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
                 "capture_waveform",
                 "capture_logic",
                 "select_tool",
+                "read_tof",
+                "read_thermal",
             ],
             planned_tools=["read_digital"],
         )
@@ -299,6 +307,28 @@ def create_mcp(settings: Settings | None = None) -> FastMCP:
             result.failure_reason,
         )
         return result.model_dump(mode="json")
+
+    @mcp.tool(annotations=readonly)
+    async def read_tof(arm: str, ctx: Context) -> dict[str, Any]:
+        """Read this arm's time-of-flight sensor: range in mm and, once zeroed with touch_off,
+        height_above_board_mm for the current tool head's tip (null with height_note saying why).
+
+        No movement. no_target (inconclusive) means nothing is in range. It measures to
+        whatever the beam hits, which may be a tall part rather than the board, and it isn't
+        evidence of contact.
+        """
+        return await instruments(ctx).read_tof(arm)
+
+    @mcp.tool(annotations=readonly)
+    async def read_thermal(arm: str, ctx: Context) -> dict[str, Any]:
+        """Read this arm's AMG8833 thermal camera: an 8x8 grid in degrees C (row-major, as the
+        sensor sees it), min/max/mean, the hottest cell [row, col], and the sensor's own
+        temperature.
+
+        No movement. Cells span the sensor's ~60 degree view, so a hot cell points at a part
+        running hot; it isn't that part's temperature. Compare against the mean, not 25 C.
+        """
+        return await instruments(ctx).read_thermal(arm)
 
     @mcp.tool(annotations=readonly)
     def read_digital(group_id: str) -> dict[str, Any]:

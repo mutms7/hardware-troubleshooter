@@ -8,13 +8,19 @@ the new joint angles.
 The solver holds two things at once: the probe-tip position and the probe's tilt from
 straight down (phi). Moving the tip keeps phi fixed, and changing phi keeps the tip fixed.
 
+With --sensors, this server owns the ESP32 sensor head (sensor_head.py): its ToF becomes a
+second height estimate, and the step governor, floor stop and turret clearance use whichever of
+the model and the ToF is lower. Both sensors are served at /api/sensors for the MCP.
+
   python sim_server.py          then open http://localhost:8765
+  python sim_server.py --hardware COM10 --sensors COM5
 """
 import argparse
 import json
 import math
 import mimetypes
 import threading
+import time
 import warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -25,6 +31,7 @@ from ikpy.chain import Chain
 import serial
 from scipy.optimize import least_squares
 
+import sensor_head
 from calibrate import JOINTS, PROBE_ID, TICKS, Bus, delta
 from fk_test import CHAIN_INDEX, SIGN, ZERO_DEG
 
@@ -75,6 +82,10 @@ PROBE_START = 1
 TOOL_HEADS = ("scope", "logic", "dmm")
 # The turret swings the other tips past the board, so it only turns this far above it.
 TOOL_CHANGE_CLEARANCE_MM = 20.0
+# Sensor head ToF (--sensors). Its beam is assumed parallel to the probe shaft. A reading older
+# than this, or taken with the probe tilted further than this, isn't used.
+TOF_MAX_AGE_S = 0.3
+TOF_MAX_TILT_DEG = 30.0
 
 mimetypes.add_type("application/octet-stream", ".stl")
 mimetypes.add_type("text/xml; charset=utf-8", ".urdf")
@@ -93,6 +104,8 @@ class Sim:
             lo.append(math.radians(min(a, b)))
             hi.append(math.radians(max(a, b)))
         self.lo, self.hi = np.array(lo), np.array(hi)
+        # ToF range with each head's tip touching the board. Mount geometry, so reset keeps it.
+        self.tof_zero_mm = {}
         self.reset()
 
     def pose(self, q):
@@ -230,11 +243,58 @@ class Sim:
         tip = self.pose(self.q)[0] if tip is None else tip
         return (tip[2] - self.board_z) * 1000.0 - (0.0 if self.calibrated else TIP_UNCERTAINTY_MM)
 
+    def tof(self):
+        """The sensor head's ToF reading and the tip height it implies, or None without --sensors.
+
+        height = (range - zero) * cos(phi), zero being the range read with this head's tip on the
+        board. height_mm is None, and why says so, unless the reading is fresh, valid and zeroed
+        and the probe isn't tilted too far."""
+        if SENSORS is None:
+            return None
+        reading = SENSORS.tof()
+        zero = self.tof_zero_mm.get(TOOL_HEADS[self.probe_idx])
+        out = {"range_mm": None, "valid": False, "age_s": None, "zero_mm": zero, "height_mm": None}
+        if reading is None:
+            out["why"] = "no reading yet" if SENSORS.connected else f"sensor head: {SENSORS.error}"
+            return out
+        age = time.time() - reading.host_time
+        out.update(range_mm=reading.range_mm, valid=reading.valid, age_s=round(age, 3))
+        phi = self.pose(self.q)[2]
+        if age > TOF_MAX_AGE_S:
+            out["why"] = "stale" if SENSORS.connected else f"stale; sensor head: {SENSORS.error}"
+        elif not reading.valid:
+            out["why"] = "no target in range"
+        elif zero is None:
+            out["why"] = "not zeroed: touch_off with this head, or start with --tof-offset-mm"
+        elif abs(phi) > TOF_MAX_TILT_DEG:
+            out["why"] = f"probe tilted past {TOF_MAX_TILT_DEG:.0f} deg"
+        else:
+            out["height_mm"] = (reading.range_mm - zero) * math.cos(math.radians(phi))
+            out["why"] = ""
+        return out
+
+    def tof_height_mm(self):
+        return (self.tof() or {}).get("height_mm")
+
+    def guard_height_mm(self):
+        """Height the safety limits use: the model's, or the ToF's when that's lower."""
+        h, tof = self.height_mm(), self.tof_height_mm()
+        return h if tof is None else min(h, tof)
+
     def touch_off(self):
-        """Call when the probe tip is physically touching the board: ties the model to reality."""
+        """Call when the probe tip is physically touching the board: ties the model to reality,
+        and zeroes the ToF for the current head."""
         self.board_z = float(self.pose(self.q)[0][2])
         self.calibrated = True
         self.msg = f"board height set from the tip: z = {self.board_z * 1000:.1f} mm"
+        tof = self.tof()
+        if tof is not None:
+            head = TOOL_HEADS[self.probe_idx]
+            if tof["valid"] and tof["age_s"] <= TOF_MAX_AGE_S:
+                self.tof_zero_mm[head] = tof["range_mm"]
+                self.msg += f"; ToF zero for {head}: {tof['range_mm']} mm"
+            else:
+                self.msg += f"; ToF not zeroed ({tof['why'] or 'no reading'})"
 
     def move(self, d, height_mm=None):
         """Move the tip by d (meters), shortened by the step governor and stopped at the floor.
@@ -246,6 +306,9 @@ class Sim:
         d = np.array(d, dtype=float)
         self.note = ""
         h = self.height_mm(tip) if height_mm is None else float(height_mm)
+        tof = self.tof_height_mm()
+        if tof is not None and tof < h:
+            h = tof  # the ToF can only make the limits more cautious, never less
         # Moving straight away from the board can't hurt it, so retreating isn't slowed or shortened.
         self.retreating = bool(d[2] > 0 and d[2] >= 0.9 * np.linalg.norm(d))
         cap = CAP_FAR_MM if self.retreating else self.step_cap_mm(h)
@@ -306,7 +369,7 @@ class Sim:
         if not 0 <= new < len(PROBE_ANGLES):
             self.msg = f"blocked: only probes 1 to {len(PROBE_ANGLES)}"
             return
-        if new != self.probe_idx and self.height_mm() < TOOL_CHANGE_CLEARANCE_MM:
+        if new != self.probe_idx and self.guard_height_mm() < TOOL_CHANGE_CLEARANCE_MM:
             self.msg = (f"blocked: lift to {TOOL_CHANGE_CLEARANCE_MM:.0f} mm above the board "
                         "before turning the turret")
             return
@@ -324,6 +387,8 @@ class Sim:
     def state(self):
         tip, shaft, phi = self.pose(self.q)
         right, up, depth = self.camera_axes()
+        model_h, tof = self.height_mm(tip), self.tof()
+        h = model_h if tof is None or tof["height_mm"] is None else min(model_h, tof["height_mm"])
         return {
             "camera_axes": {"right": right.tolist(), "up": up.tolist(), "depth": depth.tolist()},
             "joints": {self.chain.links[i].name: float(self.q[i]) for i in CHAIN_INDEX.values()},
@@ -332,8 +397,12 @@ class Sim:
             "phi": phi,
             "board_z": self.board_z,
             "board_calibrated": self.calibrated,
-            "height_mm": self.height_mm(tip),
-            "cap_mm": self.step_cap_mm(self.height_mm(tip)),
+            # What the limits use: the lower of the model and the ToF (see tof.why if unused).
+            "height_mm": h,
+            "height_source": "model" if h == model_h else "tof",
+            "model_height_mm": model_h,
+            "tof": tof,
+            "cap_mm": self.step_cap_mm(h),
             "note": self.note,
             "probe": self.probe_idx + 1,
             "probe_deg": PROBE_ANGLES[self.probe_idx],
@@ -464,7 +533,7 @@ class Hardware:
 
     def push(self):
         # Slow the servos down near the board so one command can't move fast there.
-        far = self.sim.height_mm() >= FAR_MM or self.sim.retreating
+        far = self.sim.guard_height_mm() >= FAR_MM or self.sim.retreating
         speed = self.speed if far else min(self.speed, self.near_speed)
         if speed != self._speed_now:
             for sid in self._ids():
@@ -478,6 +547,7 @@ class Hardware:
 
 SIM = Sim()
 HW = None
+SENSORS = None  # sensor_head.SensorHead with --sensors
 LOCK = threading.Lock()
 ALLOWED_DIRS = ("viewer", "urdf")
 MOTION = ("/api/move", "/api/tilt", "/api/probe", "/api/reset", "/api/cmd")
@@ -530,6 +600,13 @@ class Handler(BaseHTTPRequestHandler):
     def _get(self):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
+        if path == "/api/sensors":  # read-only; the sensor head has its own lock
+            if SENSORS is None:
+                return self._json({"enabled": False, "error": "no sensor head: start with --sensors"})
+            with LOCK:
+                probe = SIM.tof()
+                probe["tool"] = TOOL_HEADS[SIM.probe_idx]
+            return self._json({"enabled": True, **SENSORS.snapshot(), "probe": probe})
         if path == "/api/state":
             with LOCK:
                 if HW and not HW.armed:  # read-only mirror: the viewer follows the real arm
@@ -621,11 +698,21 @@ if __name__ == "__main__":
     ap.add_argument("--speed", type=int, default=300, help="servo speed limit, steps/s (4096 = one turn)")
     ap.add_argument("--accel", type=int, default=20, help="servo acceleration, 0-254")
     ap.add_argument("--port", type=int, default=PORT, help="HTTP port; give each arm its own")
+    ap.add_argument("--sensors", metavar="PORT",
+                    help="ESP32 sensor head (ToF + thermal) on this COM port, or 'auto'")
+    ap.add_argument("--tof-offset-mm", type=float,
+                    help="ToF range with the tip touching the board, for every head "
+                         "(otherwise touch_off sets it for the current head)")
     ap.add_argument("--floor-offset-mm", type=float, default=0.0,
                     help="lower the table and board floors by this much. For finding the real needle's contact height when the "
                          "model's table height is stale or the needle sits above the model's tip. Contact is then found by "
                          "following error / PnP, not by the floor: use only with slow steps and the arm watched.")
     args = ap.parse_args()
+    if args.sensors:
+        SENSORS = sensor_head.SensorHead(None if args.sensors == "auto" else args.sensors)
+        if args.tof_offset_mm is not None:
+            SIM.tof_zero_mm = dict.fromkeys(TOOL_HEADS, args.tof_offset_mm)
+        print(f"Sensor head on {SENSORS.port}: ToF and thermal at /api/sensors.")
     if args.floor_offset_mm:
         TABLE_Z -= args.floor_offset_mm / 1000.0
         SIM.board_z -= args.floor_offset_mm / 1000.0

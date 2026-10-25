@@ -101,6 +101,8 @@ async def test_tool_contract_and_deduplication(tmp_path):
             "select_tool",
             "get_instrument_status",
             "list_capture_profiles",
+            "read_tof",
+            "read_thermal",
             "ingest_design",
             "list_designs",
             "set_active_design",
@@ -248,3 +250,8 @@ async def test_instrument_tools_through_actual_mcp(tmp_path):
         }
         bad = await call(client, "select_tool", arm="Z", head="scope")
         assert bad["failure_reason"] == "unknown_arm"
+        tof = await call(client, "read_tof", arm="A")
+        assert (tof["status"], tof["mode"]) == ("ok", "simulated")
+        assert tof["measurements"]["height_above_board_mm"] == 12.0
+        thermal = await call(client, "read_thermal", arm="A")
+        assert thermal["measurements"]["hottest_cell"] == [3, 4]

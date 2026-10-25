@@ -109,6 +109,8 @@ simulation returns 3.29 V with `mode=simulated`. It demonstrates the interface o
 | `select_tool(arm, head)` | Turns one arm's turret to the scope, logic, or multimeter head. |
 | `capture_waveform(arm, profile_id)` | Selects the scope head and captures its AD3 channel. |
 | `capture_logic(logic_type, lines)` | Selects logic heads and captures and decodes UART, PWM, I2C, or partial SPI. |
+| `read_tof(arm)` | Reads the arm's ToF: range, and the tip's height above the board once zeroed. |
+| `read_thermal(arm)` | Reads the arm's AMG8833 8x8 thermal grid in °C, with the hottest cell. |
 | `read_digital(group_id)` | Explicit `not_implemented` extension point. |
 
 The AD3 tools run the WaveForms SDK on this host and capture wherever the probe already

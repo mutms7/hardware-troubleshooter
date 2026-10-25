@@ -160,6 +160,32 @@ class FakeArm:
             raise ConnectionError("connection refused")
         return {"tool": self.tool, "msg": "ok", "hw": {"mode": "sim", "armed": False}}
 
+    def sensors(self) -> dict:
+        """A sensor head 50 mm from the board when zeroed, the tip 12 mm above it, and one warm
+        part in an otherwise 24 C frame."""
+        self.state()
+        celsius = [[24.0] * 8 for _ in range(8)]
+        celsius[3][4], celsius[3][5] = 41.5, 33.0
+        return {
+            "enabled": True,
+            "simulated": True,
+            "connected": True,
+            "error": None,
+            "tof_model": "VL53L0X",
+            "tof": {"seq": 1, "age_s": 0.02, "range_mm": 62, "valid": True, "raw_status": 11},
+            "thermal": {
+                "seq": 1,
+                "age_s": 0.05,
+                "thermistor_c": 25.5,
+                "min_c": 24.0,
+                "max_c": 41.5,
+                "mean_c": 24.41,
+                "hottest_cell": [3, 4],
+                "celsius": celsius,
+            },
+            "probe": {"height_mm": 12.0, "zero_mm": 50, "why": "", "tool": self.tool},
+        }
+
     def select_tool(self, head: str) -> dict:
         state = self.state()
         if self.scenario == "tool_change_blocked" and head != self.tool:
