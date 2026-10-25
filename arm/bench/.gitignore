@@ -1,0 +1,5 @@
+# Runtime files written by teach.py / run.py; work/teach.yaml (the taught points) is tracked.
+work/cmd/
+work/state.json
+work/state.json.tmp
+work/log.txt

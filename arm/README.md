@@ -4,7 +4,7 @@ Builds each arm's URDF and Maker SDK profile from the vendored Maker Arm v1 file
 ([vendor/maker_arm/](vendor/maker_arm/UPSTREAM.md)). Our rig keeps the six arm joints and
 motor 7, but swaps the stock gripper for a rotating toolhead and mounts a camera on the
 wrist. It's a plain Python library (numpy, PyYAML). There's no IK, motion, camera or
-MCP code here.
+MCP code here. Hand-taught bench moves over USB-CAN on Windows are in [bench/](bench/README.md).
 
 ## What gets built
 
