@@ -1,0 +1,18 @@
+{
+ "tip_m": [
+  -0.030060345623971797,
+  -0.061179783778926695,
+  0.010204190715243255
+ ],
+ "phi_deg": -15.814506148459714,
+ "joints": {
+  "revolute_1__1_": 0.1545057339269457,
+  "revolute_2__1_": 0.45543079825259053,
+  "revolute_3__1_": -0.4446726903556916,
+  "revolute_1": -1.4212406763934269,
+  "revolute_2": 2.0943951023931953
+ },
+ "tool": "dmm",
+ "saved": "2026-10-25",
+ "note": "Quectel Pi M1 on bare wood, underside up, board clear of the probe shaft (pose fit 0.9-1.9 px)"
+}

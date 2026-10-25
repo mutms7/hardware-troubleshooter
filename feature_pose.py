@@ -50,10 +50,10 @@ class BoardFeatures:
                 pts.append([p[0], p[1], 0.0])
         return cls(desc[keep], np.array(pts))
 
-    def solve(self, frame, K, dist, min_inliers=15):
-        """Returns (rms_px, rvec, tvec, n_inliers) or None."""
+    def solve(self, frame, K, dist, min_inliers=15, ignore=None):
+        """Returns (rms_px, rvec, tvec, n_inliers) or None. ignore: 255 where not to look (the probe)."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        kps, desc = self.sift.detectAndCompute(gray, None)
+        kps, desc = self.sift.detectAndCompute(gray, None if ignore is None else cv2.bitwise_not(ignore))
         if desc is None or len(kps) < min_inliers:
             return None
         good = []
@@ -64,8 +64,11 @@ class BoardFeatures:
             return None
         img = np.array([kps[m.queryIdx].pt for m in good], np.float32)
         obj = self.pts3d[[m.trainIdx for m in good]]
-        ok, rvec, tvec, inl = cv2.solvePnPRansac(obj, img, K, dist, iterationsCount=300, reprojectionError=4.0,
-                                                 confidence=0.999, flags=cv2.SOLVEPNP_SQPNP)
+        try:
+            ok, rvec, tvec, inl = cv2.solvePnPRansac(obj, img, K, dist, iterationsCount=300, reprojectionError=4.0,
+                                                     confidence=0.999, flags=cv2.SOLVEPNP_SQPNP)
+        except cv2.error:                       # SQPnP can assert on a degenerate sample; skip this frame
+            return None
         if not ok or inl is None or len(inl) < min_inliers:
             return None
         inl = inl.ravel()

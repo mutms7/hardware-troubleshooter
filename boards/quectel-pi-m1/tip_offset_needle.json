@@ -1,0 +1,15 @@
+{
+ "tip_in_camera_mm": [
+  8.329,
+  -19.936,
+  130.682
+ ],
+ "depth_mm": 125.60457711737817,
+ "spread_mm": 1.1120095443714675,
+ "method": "hand-guided touch-off, 2 touches",
+ "tip_pixel": [
+  1022.0,
+  447.0
+ ],
+ "note": "from a touch on Quectel Pi M1 DBG_TX (H3.1) on 2026-10-25: camera pose at contact + the pad position; previous value in tip_offset_needle_before_pim1.json"
+}

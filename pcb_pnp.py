@@ -30,11 +30,15 @@ def segment(frame, lo, hi):
     return mask
 
 
-def board_corners(mask, min_area):
+def board_corners(mask, min_area, merge=False):
+    """merge: the board may be cut in pieces (the probe masked out across it), so fit around every big piece together."""
     cs, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cs:
         return None, None
     c = max(cs, key=cv2.contourArea)
+    if merge:
+        big = [x for x in cs if cv2.contourArea(x) >= 0.15 * cv2.contourArea(c)]
+        c = np.vstack(big) if cv2.contourArea(c) >= min_area else c
     if cv2.contourArea(c) < min_area:
         return None, None
     hull = cv2.convexHull(c)
@@ -53,7 +57,7 @@ def board_corners(mask, min_area):
     return quad, c
 
 
-def solve(quad, obj, K, dist, prev_R, flip):
+def solve(quad, obj, K, dist, prev_R, flip, pick=None):
     cands = []
     for k in range(4):
         o = np.roll(obj, k, axis=0)
@@ -67,7 +71,9 @@ def solve(quad, obj, K, dist, prev_R, flip):
         return None
     cands.sort(key=lambda c: c[0])
     pair = cands[:2]                                             # the two 180-degree-apart readings fit equally well
-    if prev_R is not None:
+    if pick is not None:                                         # something on the board tells the two ends apart
+        best = max(pair, key=pick)
+    elif prev_R is not None:
         ang = lambda c: np.arccos(np.clip((np.trace(prev_R.T @ cv2.Rodrigues(c[2])[0]) - 1) / 2, -1, 1))
         best = min(pair, key=ang)
     else:
@@ -79,22 +85,45 @@ HSV_CANDIDATES = [((35, 50, 30), (95, 255, 255)), ((40, 70, 40), (115, 255, 255)
                   ((38, 60, 30), (105, 255, 255)), ((45, 100, 40), (110, 255, 255))]
 
 
-def solve_frame(frame, obj, K, dist, prev_R, flip):
+def anchor_score(frame, K, dist, anchor):
+    """How much the board point anchor = {"x", "y"} (mm) looks like a bright, unsaturated part (a metal shield) in this frame,
+    for a candidate pose c = (rms, k, rvec, tvec). Used to choose between the two 180-degree readings of a rectangle."""
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    h, w = frame.shape[:2]
+
+    def score(c):
+        p = cv2.projectPoints(np.array([[anchor["x"], anchor["y"], 0.0]], np.float32), c[2], c[3], K, dist)[0].reshape(2)
+        x, y = int(round(p[0])), int(round(p[1]))
+        r = int(anchor.get("r_px", 6))
+        if not (r <= x < w - r and r <= y < h - r):
+            return -1e9
+        patch = hsv[y - r:y + r + 1, x - r:x + r + 1].reshape(-1, 3).astype(float)
+        return float(np.mean(patch[:, 2]) - np.mean(patch[:, 1]))      # bright minus saturated
+
+    return score
+
+
+def solve_frame(frame, obj, K, dist, prev_R, flip, roi=None, anchor=None, ignore=None):
     """Try several colour ranges and keep the corner fit that matches the known rectangle best.
     A wrong quad (glare cutting the board, wood joining it) fits the rectangle badly, so the fit is its own check.
+    roi: (x0, y0, x1, y1) as fractions of the frame to search; default skips the old bench's edge stickers.
+    anchor: a bright, unsaturated board point {"x", "y"} (mm) that picks between the two 180-degree readings.
     Returns ((rms, k, rvec, tvec), quad, mask) or None."""
     best = None
     h, w = frame.shape[:2]
-    x0, y0, x1, y1 = int(0.15 * w), int(0.05 * h), int(0.85 * w), int(0.85 * h)     # the bench's green stickers sit at the edges
+    fx0, fy0, fx1, fy1 = roi or (0.15, 0.05, 0.85, 0.85)                            # the bench's green stickers sit at the edges
+    x0, y0, x1, y1 = int(fx0 * w), int(fy0 * h), int(fx1 * w), int(fy1 * h)
     for lo, hi in HSV_CANDIDATES:
         mask = segment(frame, lo, hi)
         inside = np.zeros_like(mask)
         inside[y0:y1, x0:x1] = mask[y0:y1, x0:x1]
         mask = inside
-        quad, _ = board_corners(mask, 0.005 * h * w)
+        if ignore is not None:                                   # the probe: never part of the board
+            mask[ignore > 0] = 0
+        quad, _ = board_corners(mask, 0.005 * h * w, merge=ignore is not None)
         if quad is None:
             continue
-        r = solve(quad, obj, K, dist, prev_R, flip)
+        r = solve(quad, obj, K, dist, prev_R, flip, anchor_score(frame, K, dist, anchor) if anchor else None)
         if r is not None and (best is None or r[0] < best[0][0]):
             best = (r, quad, mask)
     return best

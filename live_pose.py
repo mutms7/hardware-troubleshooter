@@ -29,6 +29,7 @@ from pnp_test import load_intrinsics
 HERE = Path(__file__).resolve().parent
 FEED_JPG = Path(tempfile.gettempdir()) / "troubleshooter_live_feed.jpg"   # read by sim_server.py
 FEED_PERIOD_S = 0.2
+STILL_SHIFT_PX = 0.3     # the picture counts as still when it moves less than this between solves
 LATENCY_S = 0.3          # frames are about this old by the time they are read: ignore poses from before (t + LATENCY_S)
 
 
@@ -47,8 +48,12 @@ class LivePose:
         self.needle = np.array(json.loads((HERE / needle_file).read_text())["tip_in_camera_mm"], float)
         tp = json.loads((HERE / "probe_point.json").read_text(encoding="utf-8-sig"))
         self.tip_px = (tp["x"] * width / tp.get("width", 1920), tp["y"] * height / tp.get("height", 1080))
-        self.jpads = [p for p in self.geo["pads"] if p["ref"].startswith("J")]
+        # header pads to draw for orientation; a board without J* headers (a hand-made geometry) gets all its pads
+        self.jpads = [p for p in self.geo["pads"] if p["ref"].startswith("J")] or self.geo["pads"]
         self.bf = BoardFeatures.load() if NPZ.exists() else None
+        pm = HERE / "probe_mask.png"                 # make_probe_mask.py: the probe's pixels, fixed in the camera's view
+        self.ignore = cv2.resize(cv2.imread(str(pm), cv2.IMREAD_GRAYSCALE), (width, height),
+                                 interpolation=cv2.INTER_NEAREST) if pm.exists() else None
         self.cap = cv2.VideoCapture(camera, cv2.CAP_DSHOW)
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
@@ -83,11 +88,12 @@ class LivePose:
             last_t = ft
             found = None
             if self.bf is not None:
-                r = self.bf.solve(frame, self.K, self.dist)
+                r = self.bf.solve(frame, self.K, self.dist, ignore=self.ignore)
                 if r is not None and r[0] <= 2.5:
                     found = (r[1], r[2], r[0], f"features ({r[3]} pts)")
             if found is None:
-                res = solve_frame(frame, self.obj, self.K, self.dist, self._prev_R, True)
+                res = solve_frame(frame, self.obj, self.K, self.dist, self._prev_R, self.geo.get("flip", True),
+                                  self.geo.get("roi"), self.geo.get("anchor"), self.ignore)
                 if res is not None and res[0][0] <= 3.0:
                     found = (res[0][2], res[0][3], res[0][0], "colour corners")
             if found is None:
@@ -106,11 +112,17 @@ class LivePose:
 
     # ---- filtering the pose
     def _is_static(self, frame):
-        """True once the picture has stopped changing (3 solves in a row with a tiny frame-to-frame difference)."""
-        small = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (160, 90)).astype(np.float32)
-        d = 99.0 if self._prev_small is None else float(np.mean(np.abs(small - self._prev_small)))
+        """True once the picture has stopped moving: 3 solves in a row whose frame shifted under STILL_SHIFT_PX against
+        the one before. Measured as a shift (phase correlation), not a pixel difference: in dim light the camera's noise
+        alone gave a mean difference of 3-18 grey levels with the arm still (2026-10-25), so the old 2.5 never triggered."""
+        small = cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (320, 180)).astype(np.float32)
+        if self._prev_small is None:
+            shift = 99.0
+        else:
+            (dx, dy), _ = cv2.phaseCorrelate(self._prev_small, small)
+            shift = float(np.hypot(dx, dy)) * frame.shape[1] / 320.0      # in full-frame pixels
         self._prev_small = small
-        self._static_n = self._static_n + 1 if d < 2.5 else 0
+        self._static_n = self._static_n + 1 if shift < STILL_SHIFT_PX else 0
         return self._static_n >= 3
 
     def _filter(self, R, t, static):

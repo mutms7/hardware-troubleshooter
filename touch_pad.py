@@ -19,6 +19,7 @@ Aborts and retreats on: board lost, refused jog, a crash, the window closed (q),
 import argparse
 import json
 import math
+import re
 import threading
 import time
 from pathlib import Path
@@ -43,6 +44,9 @@ ap.add_argument("--from-here", action="store_true", help="skip the start pose an
 BOARD_CAL = HERE / "board_cal.json"            # from calibrate_board.py
 ap.add_argument("--contact-depth", type=float, default=6.0,
                 help="the command may go this far below the board in the final descent; the servos lag it near the board (mm)")
+ap.add_argument("--tof-touch", type=float, default=None,
+                help="no board calibration: touching when the ToF median is at or under this (mm). A stopgap for a board that "
+                     "hasn't been calibrated; the ToF sees beside the needle, so check the result by eye")
 ap.add_argument("--press", type=float, default=0.5, help="go this far below the calibrated board height (mm)")
 ap.add_argument("--max-shift", type=float, default=5.0, help="abort if the start-pose ToF says the board moved more than this (mm)")
 ap.add_argument("--blocked", type=float, default=5.0, help="servos this far behind within 2 mm of the target = touching (mm)")
@@ -53,7 +57,13 @@ args = ap.parse_args()
 lp = LivePose(target=args.target)
 arm = Arm()
 goal = lp.goal
-mapping = {"s": 1.0, "theta": 0.0}
+# Jog -> needle-on-board response, a full 2x2 matrix: board mm moved per mm of (right, up) jog. The two jog axes behave
+# differently (right swings the base, up bends the shoulder and elbow), so one rotation + scale can't describe it: on
+# 2026-10-25 two moves 90 deg apart came out 53 deg apart. Measured by one move along each axis, then refined.
+J = -np.eye(2)
+probes_done = 0
+PROBE_MM = 10.0          # the two measuring moves, one along each jog axis
+LEARN_MAX_MM = 20.0      # only moves up to this long refine J: long moves curve as the arm swings about its base
 stop_file = HERE / "STOP"
 if stop_file.exists():
     stop_file.unlink()
@@ -86,12 +96,18 @@ def check_stop():
 
 
 def jog(r=0.0, u=0.0, i=0.0, wait=0.3):
+    """Returns the fraction of the jog the server actually sent (its governor shortens jogs near the board)."""
     s = arm.jog(right=float(r), up=float(u), in_=float(i))
     if s.get("msg") != "ok":
         raise Abort(f"jog ({r:+.1f}, {u:+.1f}, {i:+.1f}) refused: {s.get('msg')}")
-    if s.get("note"):
-        say(f"   server: {s['note']}")
+    note = s.get("note") or ""
     time.sleep(wait)
+    m = re.match(r"shortened to ([\d.]+) mm", note)
+    if m:
+        return min(1.0, float(m.group(1)) / max(abs(r), abs(u), abs(i), 1e-9))
+    if note:
+        say(f"   server: {note}")
+    return 0.0 if "floor" in note else 1.0
 
 
 def lower(mm, wait=0.8, contact_mm=None):
@@ -115,26 +131,65 @@ def retreat(mm=28.0):
         time.sleep(1.2)
 
 
-def level_burst(err):
-    """The level move that should shift the needle by `err` board mm, as a burst of <=9 mm jogs; then let it settle."""
-    u = -(rot(-mapping["theta"]) @ err) / mapping["s"]          # right, up
-    n = max(1, math.ceil(float(np.linalg.norm(u)) / 9.0))
-    for _ in range(n):
-        jog(u[0] / n, u[1] / n)
+def burst(u):
+    """Jog (right, up) = u mm in <=9 mm pieces, repeating whatever the server's governor shortened, then let it settle."""
+    left = np.array(u, float)
+    for _ in range(60):
+        n = float(np.linalg.norm(left))
+        if n < 0.05:
+            break
+        piece = left * min(1.0, 9.0 / n)
+        left -= piece * jog(piece[0], piece[1])
     time.sleep(1.2)
+
+
+def level_burst(err):
+    """The level move that should shift the needle by `err` board mm."""
+    u = np.linalg.solve(J, err)
+    burst(u)
     return u
 
 
 def learn(u, before, after):
+    """Refine J from a move u (jog mm) that moved the needle from `before` to `after` (board mm)."""
+    global J
     d = after[:2] - before[:2]
-    if np.linalg.norm(u) < 3.0 or np.linalg.norm(d) < 1.0:
+    nu = float(np.linalg.norm(u))
+    if nu < 3.0 or nu > LEARN_MAX_MM:
         return
-    pred = rot(mapping["theta"]) @ (-u)
-    dth = math.atan2(d[1], d[0]) - math.atan2(pred[1], pred[0])
-    dth = (dth + math.pi) % (2 * math.pi) - math.pi
-    mapping["theta"] += 0.7 * dth
-    mapping["s"] = float(np.clip(mapping["s"] + 0.7 * (np.linalg.norm(d) / np.linalg.norm(u) - mapping["s"]), 0.25, 1.6))
-    say(f"   jog mapping: scale {mapping['s']:.2f}, rotation {math.degrees(mapping['theta']):+.0f} deg")
+    pred = J @ u
+    if float(np.linalg.norm(d)) < 0.4 * float(np.linalg.norm(pred)):
+        raise Abort(f"the needle moved {np.linalg.norm(d):.1f} mm where {np.linalg.norm(pred):.1f} mm was expected: "
+                    f"the arm isn't following (a joint at its limit?)")
+    J = J + np.outer(d - pred, u) / (u @ u)                      # Broyden update
+    say(f"   jog response: right -> ({J[0, 0]:+.2f}, {J[1, 0]:+.2f}), up -> ({J[0, 1]:+.2f}, {J[1, 1]:+.2f}) board mm per mm")
+
+
+def probe_axes():
+    """One PROBE_MM move along each jog axis measures J's two columns exactly."""
+    global J, probes_done
+    m0 = look()
+    if m0 is None:
+        raise Abort("lost the board before the measuring moves")
+    cols = []
+    for k, name in ((0, "right"), (1, "up")):
+        u = np.zeros(2)
+        u[k] = PROBE_MM
+        burst(u)
+        m1 = look()
+        if m1 is None:
+            raise Abort("lost the board during the measuring moves")
+        d = m1[0][:2] - m0[0][:2]
+        say(f"   measuring move {name} {PROBE_MM:.0f} mm: needle moved ({d[0]:+.1f}, {d[1]:+.1f}) mm")
+        if np.linalg.norm(d) < 0.4 * PROBE_MM:
+            raise Abort(f"a {PROBE_MM:.0f} mm jog {name} moved the needle {np.linalg.norm(d):.1f} mm: the arm isn't following")
+        cols.append(d / PROBE_MM)
+        m0 = m1
+    J = np.column_stack(cols)
+    probes_done = 2
+    if abs(np.linalg.det(J)) < 0.2:
+        raise Abort("the two jog axes move the needle along nearly the same line: can't steer from here")
+    say(f"   jog response: right -> ({J[0, 0]:+.2f}, {J[1, 0]:+.2f}), up -> ({J[0, 1]:+.2f}, {J[1, 1]:+.2f}) board mm per mm")
 
 
 def center(tol, tries):
@@ -151,6 +206,9 @@ def center(tol, tries):
         say(f"   needle ({tb[0]:.2f}, {tb[1]:.2f}) at {-tb[2]:.1f} mm up, {e:.2f} mm from the pad")
         if e < tol:
             return m
+        if probes_done < 2:
+            probe_axes()
+            continue
         u = level_burst(err)
         m2 = look()
         if m2 is not None:
@@ -208,6 +266,11 @@ def follow(base=0.0):
 def go_to_start():
     start = json.loads(Path(args.start).read_text())
     say(f"0. going to the start pose ({args.start})")
+    for _ in range(10):                         # from near the board, lift first: goto would want its full travel height,
+        if arm.state().get("height_mm", 99.0) >= 18.0:      # which the wrist can't reach at the start pose
+            break
+        arm.move_z(5.0)
+        time.sleep(0.8)
     for _ in range(3):                          # the servos lag, so a goto often ends 'not reached in time': re-plan from there
         s = arm.goto(start["tip_m"], phi=start["phi_deg"], timeout=90.0)
         if s.get("msg") == "ok" or "not reached in time" not in s.get("msg", ""):
@@ -229,7 +292,7 @@ def run():
     say(f"start: needle at board ({tb[0]:.1f}, {tb[1]:.1f}) mm, {-tb[2]:.1f} mm above the board, fit {fit:.2f} px; pad "
         f"{lp.pad['ref']}.{lp.pad['pad']} [{lp.pad['net']}] at ({goal[0]:.1f}, {goal[1]:.1f}), {np.linalg.norm(goal - tb[:2]):.1f} mm away")
     base = float(np.mean([follow() for _ in range(5)]))
-    z_board = None if args.align_only else board_height()
+    z_board = None if args.align_only or args.tof_touch is not None else board_height()
 
     say("1. centre over the pad")
     m = center(args.tol, args.tries)
@@ -257,6 +320,58 @@ def run():
             raise Abort("the needle barely came down")
         m = center(args.tol, args.tries)
 
+    if args.tof_touch is not None:
+        result = tof_descent()
+    else:
+        result = encoder_descent(z_board, base)
+
+    m = look(n=3) or m
+    tb, fit = m
+    off = goal - tb[:2]
+    say(f"{result.upper()}: needle at board ({tb[0]:.2f}, {tb[1]:.2f}) mm, {-tb[2]:.2f} mm above the plane; pad is "
+        f"{np.linalg.norm(off):.2f} mm away (dx {off[0]:+.2f}, dy {off[1]:+.2f})")
+    json.dump({"target": f"{lp.pad['ref']}.{lp.pad['pad']}", "net": lp.pad["net"], "result": result,
+               "tip_z_mm": tip_z(), "board_z_mm": z_board, "needle_board_mm": tb.tolist(), "off_pad_mm": off.tolist(),
+               "off_pad_norm_mm": float(np.linalg.norm(off))},
+              open(HERE / "touch_pad_result.json", "w"), indent=1)
+    say(f"holding the contact for {args.hold_s:.0f} s")
+    time.sleep(args.hold_s)
+    arm.jog(in_=-3.5)
+    time.sleep(1.5)
+    retreat(25.0)
+    say("done: backed off and retreated")
+
+
+def tof_descent():
+    """Straight down until the ToF median reaches --tof-touch (no board calibration)."""
+    base = float(np.mean([follow() for _ in range(5)]))
+    say(f"3. final descent: straight down until the ToF median is at or under {args.tof_touch:.0f} mm")
+    cmd = 0.0
+    while cmd < args.max_cmd:
+        check_stop()
+        m = look()
+        if m is None:
+            raise Abort("lost the board in the final descent")
+        tb, fit = m
+        err = goal - tb[:2]
+        r = tof_mm(9)
+        gap = follow(base)
+        say(f"   cmd {cmd:5.2f}  ToF {'--' if r is None else f'{r:5.1f}'} mm  PnP {-tb[2]:5.2f} mm up  "
+            f"xy off {np.linalg.norm(err):.2f} mm  follow {gap:+.2f}")
+        if r is not None and r <= args.tof_touch:
+            return f"touching (ToF {r:.1f} mm <= {args.tof_touch:.0f} mm)"
+        if gap > args.max_follow:
+            raise Abort(f"the servos are {gap:.1f} mm behind the command: stopping before they catch up all at once")
+        if np.linalg.norm(err) > args.recentre:
+            level_burst(err)
+        step = 2.0 if -tb[2] > 4.0 else 1.0
+        lower(step)
+        cmd += step
+    raise Abort(f"went {args.max_cmd:.0f} mm of command without the ToF reaching {args.tof_touch:.0f} mm")
+
+
+def encoder_descent(z_board, base):
+    """Straight down until the encoders put the tip --press below the calibrated board height."""
     target = z_board - args.press
     say(f"3. final descent: straight down until the encoders put the tip at z {target:.1f} mm ({args.press:.1f} mm into the board)")
     cmd, result = 0.0, None
@@ -287,21 +402,7 @@ def run():
         cmd += step
     if result is None:
         raise Abort(f"went {args.max_cmd:.0f} mm of command without reaching the board height")
-
-    m = look(n=3) or m
-    tb, fit = m
-    off = goal - tb[:2]
-    say(f"{result.upper()}: needle at board ({tb[0]:.2f}, {tb[1]:.2f}) mm, {-tb[2]:.2f} mm above the plane; pad is "
-        f"{np.linalg.norm(off):.2f} mm away (dx {off[0]:+.2f}, dy {off[1]:+.2f})")
-    json.dump({"target": f"{lp.pad['ref']}.{lp.pad['pad']}", "net": lp.pad["net"], "result": result,
-               "tip_z_mm": tip_z(), "board_z_mm": z_board, "needle_board_mm": tb.tolist(), "off_pad_mm": off.tolist(), "off_pad_norm_mm": float(np.linalg.norm(off))},
-              open(HERE / "touch_pad_result.json", "w"), indent=1)
-    say(f"holding the contact for {args.hold_s:.0f} s")
-    time.sleep(args.hold_s)
-    arm.jog(in_=-3.5)
-    time.sleep(1.5)
-    retreat(25.0)
-    say("done: backed off and retreated")
+    return result
 
 
 def worker():

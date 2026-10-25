@@ -99,6 +99,7 @@ TOOL_CHANGE_CLEARANCE_MM = 20.0
 TILT_AROUND_DEG = 20.0
 # goto: lift straight up to this height, travel around the other arm, come straight down.
 TRAVEL_MM = 30.0
+MIN_TRAVEL_MM = 15.0       # ...unless both ends are at least this high: then it crosses at the lower end's height
 PLAN_STEP_DEG = 5.0        # executed waypoints are at most this far apart on any joint
 PLAN_SWEEP_MM = 10.0       # goto checks its path coarser than a jog, with that much more margin
 SIM_STEP_S = 0.05          # sim only: pause between waypoints so the viewer shows the motion
@@ -265,8 +266,9 @@ class Sim:
             return None, f"blocked: would swing a joint {swing:.0f} deg in one step"
         return q, ""
 
-    def _try(self, target, phi_target, label):
-        if target[2] < self.board_z:
+    def _try(self, target, phi_target, label, below_mm=0.0):
+        """below_mm: how far under the board plane the target may go (a deliberate touch, see move contact_mm)."""
+        if target[2] < self.board_z - below_mm / 1000.0:
             self.msg = f"blocked: z {target[2]*1000:.0f} mm is below the board plane"
             return False
         q, why = self._solve_step(target, phi_target, label)
@@ -416,7 +418,7 @@ class Sim:
                 if not d.any():
                     self.msg = "blocked: probe is at the floor"
                     return
-        self._try(tip + d, self.phi_target, "move")
+        self._try(tip + d, self.phi_target, "move", below_mm=-margin if margin < 0 else 0.0)
 
     def tilt(self, step):
         tip, _, _ = self.pose(self.q)
@@ -498,6 +500,12 @@ class Sim:
         target = np.asarray(target, dtype=float)
         floor = self.board_z + FLOOR_MARGIN
         travel_z = self.board_z + TRAVEL_MM / 1000.0
+        # Both ends already well clear of the board: cross at the lower of the two, rather than climbing to TRAVEL_MM (a
+        # start pose 28 mm up was refused because its 2 mm vertical leg was out of the wrist's reach). The crossing is
+        # still checked against the floor below.
+        here_z = float(self.pose(self.q)[0][2])
+        if min(here_z, target[2]) >= self.board_z + MIN_TRAVEL_MM / 1000.0:
+            travel_z = min(travel_z, here_z, float(target[2]))
         if target[2] < floor:
             self.msg = f"blocked: target z {target[2] * 1000:.0f} mm is below the board plane"
             return None

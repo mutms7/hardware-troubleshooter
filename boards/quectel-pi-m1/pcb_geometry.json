@@ -1,0 +1,44 @@
+{
+ "source": "Quectel_Pi_M1_3D_Dimensions_20260331.stp (H3 placement) + user: TX is the leftmost H3 pin with the USB-A/RJ45 edge up, seen from below. Pin pitch 2.54 assumed centred on H3's origin.",
+ "units": "mm",
+ "origin": "board corner at STEP (0, 56) seen from the underside; X = 56 - y_step, Y = x_step",
+ "side": "bottom",
+ "flip": false,
+ "width": 56.0,
+ "height": 85.0,
+ "pads": [
+  {
+   "ref": "H3",
+   "pad": "1",
+   "x": 7.54,
+   "y": 67.5,
+   "net": "DBG_TX"
+  },
+  {
+   "ref": "H3",
+   "pad": "2",
+   "x": 5.0,
+   "y": 67.5,
+   "net": "H3_MID"
+  },
+  {
+   "ref": "H3",
+   "pad": "3",
+   "x": 2.46,
+   "y": 67.5,
+   "net": "H3_END"
+  }
+ ],
+ "roi": [
+  0.02,
+  0.02,
+  0.98,
+  0.98
+ ],
+ "anchor": {
+  "x": 27.55,
+  "y": 34.06,
+  "r_px": 6,
+  "what": "centre of the SC200U module's metal shield (U16, STEP (34.06, 28.45)): bright and grey"
+ }
+}
