@@ -1,4 +1,5 @@
-"""HTTP link to one arm's sim_server.py: read state and turn the tool turret. No jogging."""
+"""HTTP link to one arm's sim_server.py: read state and sensors, and turn the tool turret.
+No jogging."""
 
 import json
 import urllib.error
@@ -19,6 +20,10 @@ class ArmLink:
 
     def state(self) -> dict:
         return self._open(f"{self.url}/api/state")
+
+    def sensors(self) -> dict:
+        """The arm's sensor head (ToF and thermal camera), when its server runs --sensors."""
+        return self._open(f"{self.url}/api/sensors")
 
     def select_tool(self, head: str) -> dict:
         body = json.dumps({"cmd": "tool", "head": head}).encode()
