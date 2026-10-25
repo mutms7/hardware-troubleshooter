@@ -450,3 +450,182 @@ def test_sim_server_tool_selection(monkeypatch):
     assert sim.state()["tool"] == "scope"
     sim.select_tool("scope")  # already there: no turret motion, so not blocked
     assert sim.msg == "ok"
+
+
+# --- sensor head ----------------------------------------------------------------------------
+
+
+def sensor_reply(**changes):
+    reply = fake.FakeArm().sensors()
+    for key, value in changes.items():
+        reply[key] = {**reply[key], **value} if isinstance(value, dict) else value
+    return reply
+
+
+async def test_read_tof_and_thermal(service):
+    tof = await service.read_tof("A")
+    assert (tof["status"], tof["mode"]) == ("ok", "simulated")
+    assert tof["measurements"]["range_mm"] == 62
+    assert tof["measurements"]["height_above_board_mm"] == 12.0
+    assert tof["measurements"]["tool"] == "dmm"
+    thermal = await service.read_thermal("B")
+    assert thermal["status"] == "ok"
+    assert thermal["measurements"]["celsius"][3][4] == 41.5
+    assert thermal["measurements"]["hottest_cell"] == [3, 4]
+
+
+@pytest.mark.parametrize(
+    "reply, status, reason",
+    [
+        (
+            sensor_reply(tof={"valid": False, "range_mm": 8191, "raw_status": 4}),
+            "inconclusive",
+            "no_target",
+        ),
+        (sensor_reply(tof={"age_s": 3.0}), "failed", "stale_reading"),
+        (sensor_reply(enabled=False), "failed", "sensors_not_enabled"),
+        (
+            sensor_reply(connected=False, tof=None, error="lost"),
+            "failed",
+            "sensor_head_disconnected",
+        ),
+    ],
+)
+async def test_read_tof_outcomes(service, monkeypatch, reply, status, reason):
+    monkeypatch.setattr(service.arms["A"], "sensors", lambda: reply)
+    result = await service.read_tof("A")
+    assert (result["status"], result["failure_reason"]) == (status, reason)
+    assert "measurements" not in result
+
+
+async def test_read_tof_unzeroed_has_range_but_no_height(service, monkeypatch):
+    why = "not zeroed: touch_off with this head, or start with --tof-offset-mm"
+    reply = sensor_reply(probe={"height_mm": None, "zero_mm": None, "why": why})
+    monkeypatch.setattr(service.arms["A"], "sensors", lambda: reply)
+    result = await service.read_tof("A")
+    assert result["status"] == "ok"
+    assert result["measurements"]["height_above_board_mm"] is None
+    assert result["measurements"]["height_note"] == why
+
+
+async def test_sensor_refusals(tmp_path):
+    instruments = make_service(tmp_path, "arm_unreachable")
+    try:
+        assert (await instruments.read_thermal("A"))["failure_reason"] == "arm_unavailable"
+        assert (await instruments.read_tof("Z"))["failure_reason"] == "unknown_arm"
+    finally:
+        await instruments.close()
+
+
+def test_sim_server_tof_limits_height(monkeypatch):
+    pytest.importorskip("ikpy")
+    pytest.importorskip("scservo_sdk")
+    monkeypatch.syspath_prepend(str(ROOT))
+    import time
+
+    import sensor_head
+    import sim_server
+
+    class Head:
+        connected, error = True, None
+        reading = sensor_head.RangeReading(1, 0, time.time(), 60, True, 11)
+
+        def tof(self):
+            return self.reading
+
+    head = Head()
+    monkeypatch.setattr(sim_server, "SENSORS", head)
+    sim = sim_server.Sim()
+    assert sim.tof()["why"].startswith("not zeroed")
+    assert sim.state()["height_source"] == "model"
+
+    tool = sim.state()["tool"]
+    sim.tof_zero_mm = {tool: 50}  # tip 10 mm above the board by ToF, ~25 mm by the model
+    state = sim.state()
+    assert state["tof"]["height_mm"] == pytest.approx(10.0)
+    assert (state["height_source"], state["height_mm"]) == ("tof", pytest.approx(10.0))
+    sim.jog_camera(0, 0, 10)  # straight down: shortened by the ToF height, not the model's
+    assert sim.note.startswith("shortened to 0.5 mm (10 mm above board)")
+    other = next(h for h in sim_server.TOOL_HEADS if h != tool)
+    sim.select_tool(other)
+    assert sim.msg.startswith("blocked: lift")
+
+    head.reading = sensor_head.RangeReading(2, 0, time.time() - 5, 60, True, 11)
+    assert sim.tof()["why"] == "stale"
+    assert sim.state()["height_source"] == "model"
+
+    head.reading = sensor_head.RangeReading(3, 0, time.time(), 70, True, 11)
+    sim.touch_off()
+    assert sim.tof_zero_mm[tool] == 70
+    assert "ToF zero" in sim.msg
+
+
+def _packet(ptype, payload, corrupt=False):
+    import struct
+
+    import sensor_head
+
+    body = struct.pack("<BH", ptype, len(payload)) + payload
+    crc = sensor_head.crc16(body) ^ (1 if corrupt else 0)
+    return b"\xa5\x5a" + body + struct.pack("<H", crc)
+
+
+def test_sensor_head_decodes_both_streams(monkeypatch):
+    pytest.importorskip("serial")
+    pytest.importorskip("numpy")
+    monkeypatch.syspath_prepend(str(ROOT))
+    import struct
+    import time
+
+    import sensor_head
+
+    frame = struct.pack("<IQh64h", 7, 1000, 400, 100, *[88] * 63)
+    stream = (
+        b"\x00junk\xa5"
+        + _packet(sensor_head.TYPE_RANGE, struct.pack("<IQHBB", 1, 10, 999, 1, 11), corrupt=True)
+        + _packet(sensor_head.TYPE_RANGE, struct.pack("<IQHBB", 1, 10, 123, 1, 11))
+        + _packet(sensor_head.TYPE_STATUS, b"err tof_i2c_read")  # unsolicited, not a reply
+        + _packet(sensor_head.TYPE_FRAME, frame)
+        + _packet(sensor_head.TYPE_RANGE, struct.pack("<IQHBB", 3, 20, 8191, 0, 4))
+    )
+
+    class FakeSerial:
+        def __init__(self, port, timeout):
+            self.data = bytearray(stream)
+
+        @property
+        def in_waiting(self):
+            return len(self.data)
+
+        def read(self, n):
+            chunk = bytes(self.data[:n])
+            del self.data[:n]
+            if not chunk:
+                time.sleep(0.005)
+            return chunk
+
+        def write(self, line):
+            if line == b"info\n":
+                self.data += _packet(sensor_head.TYPE_STATUS, b"info fw=2.0.0 tof=VL53L0X")
+
+        def reset_input_buffer(self):
+            pass
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(sensor_head.serial, "Serial", FakeSerial)
+    with sensor_head.SensorHead("COM99", timeout=1.0) as head:
+        deadline = time.monotonic() + 2
+        while (head.tof() is None or head.tof().seq != 3) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert head.command("info") == "info fw=2.0.0 tof=VL53L0X"
+        reading, thermal = head.tof(), head.thermal()
+        assert (reading.range_mm, reading.valid, reading.raw_status) == (8191, False, 4)
+        assert head.dropped_ranges == 1  # seq 2 never arrived
+        assert thermal.celsius[0, 0] == 25.0 and thermal.celsius[7, 7] == 22.0
+        assert thermal.thermistor_c == 25.0
+        snap = head.snapshot()
+        assert snap["tof_model"] == "VL53L0X"
+        assert snap["thermal"]["hottest_cell"] == [0, 0]
+        assert snap["tof"]["range_mm"] == 8191

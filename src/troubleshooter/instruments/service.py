@@ -27,6 +27,10 @@ from .rig import ROLES, RigConfig, load_rig
 LOG = logging.getLogger(__name__)
 Head = Literal["scope", "logic", "dmm"]
 CLIP_MARGIN = 0.005  # samples this close to the range edge (fraction of span) count as clipped
+# Sensor head readings older than this are stale: the ToF ranges at ~30 Hz, the AMG8833 at 10
+# fps (or 1 fps when slowed down).
+TOF_STALE_S = 0.5
+THERMAL_STALE_S = 2.5
 
 
 class CaptureResult(BaseModel):
@@ -300,6 +304,65 @@ class InstrumentService:
             return raw
 
         return await self._run("logic", logic_type, work)
+
+    async def _sensors(self, arm: str) -> tuple[dict, str]:
+        """The arm server's /api/sensors reply and its mode. Read-only: no lock, no motion."""
+        self._arm(arm)
+        try:
+            raw = await asyncio.to_thread(self.arms[arm].sensors)
+        except ConnectionError as exc:
+            raise Refused("arm_unavailable", {"arm": arm, "detail": str(exc)}) from exc
+        if not raw.get("enabled"):
+            raise Refused(
+                "sensors_not_enabled", {"note": "start this arm's sim_server.py with --sensors"}
+            )
+        return raw, "simulated" if raw.get("simulated") else "live"
+
+    async def _read_sensor(self, arm: str, key: str, stale_s: float, measure) -> dict:
+        result = {"status": "failed", "failure_reason": None, "arm": arm, "mode": None}
+        try:
+            raw, mode = await self._sensors(arm)
+        except Refused as refused:
+            return {**result, "failure_reason": refused.reason, "diagnostics": refused.diagnostics}
+        reading = raw.get(key)
+        if reading is None or reading["age_s"] > stale_s:
+            reason = "no_reading" if reading is None else "stale_reading"
+            if not raw.get("connected"):
+                reason = "sensor_head_disconnected"
+            diagnostics = {"error": raw.get("error"), "last_status": raw.get("last_status")}
+            return {**result, "failure_reason": reason, "diagnostics": diagnostics}
+        result.update(mode=mode, age_s=reading["age_s"])
+        status, reason, values = measure(reading, raw)
+        result.update(status=status, failure_reason=reason)
+        result["measurements" if status == "ok" else "diagnostics"] = values
+        return result
+
+    async def read_tof(self, arm: str) -> dict:
+        def measure(tof, raw):
+            probe = raw.get("probe") or {}
+            values = {
+                "model": raw.get("tof_model"),
+                "range_mm": tof["range_mm"],
+                "height_above_board_mm": probe.get("height_mm"),
+                "zero_mm": probe.get("zero_mm"),
+                "tool": probe.get("tool"),
+            }
+            if not tof["valid"]:
+                return "inconclusive", "no_target", {**values, "raw_status": tof["raw_status"]}
+            if values["height_above_board_mm"] is None:
+                values["height_note"] = probe.get("why")
+            return "ok", None, values
+
+        return await self._read_sensor(arm, "tof", TOF_STALE_S, measure)
+
+    async def read_thermal(self, arm: str) -> dict:
+        def measure(frame, raw):
+            keys = ("min_c", "max_c", "mean_c", "hottest_cell", "thermistor_c")
+            values = {k: frame[k] for k in keys}
+            values["celsius"] = [[round(c, 2) for c in row] for row in frame["celsius"]]
+            return "ok", None, values
+
+        return await self._read_sensor(arm, "thermal", THERMAL_STALE_S, measure)
 
     def profiles(self) -> dict:
         rig = self._require_rig()
